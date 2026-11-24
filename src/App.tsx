@@ -20,10 +20,17 @@ import {
   generateExamQuestions,
   getExamKey,
 } from './data/questionBank';
+import { validateAccountId, isAccountAuthorizedForGrade, isAdminAccount } from './data/accounts';
 
 export default function App() {
   const [view, setView] = useState<'setup' | 'exam' | 'result'>('setup');
-  const [selectedGrade, setSelectedGrade] = useState<GradeLevel>(4);
+  const [accountId, setAccountId] = useState<string>(() => localStorage.getItem('oly_account_id') || '');
+  const isAdmin = isAdminAccount(accountId);
+  const [selectedGrade, setSelectedGrade] = useState<GradeLevel>(() => {
+    const saved = localStorage.getItem('oly_account_id') || '';
+    const check = validateAccountId(saved);
+    return check.valid && check.grade ? check.grade : 4;
+  });
   const [selectedRound, setSelectedRound] = useState<ContestRound>(1);
 
   const [repoIndex, setRepoIndex] = useState<GitHubRepoIndex | null>(null);
@@ -45,14 +52,18 @@ export default function App() {
       grade: GradeLevel,
       round: ContestRound,
       indexOverride?: GitHubRepoIndex | null,
-      forceRefresh = false
+      forceRefresh = false,
+      accountOverride?: string
     ) => {
+      const activeAccount = accountOverride !== undefined ? accountOverride : accountId;
+      const allowGitHub = isAccountAuthorizedForGrade(activeAccount, grade);
       const requestId = ++loadRequestIdRef.current;
       setIsLoadingPool(true);
       try {
         const pool = await loadQuestionsForSelection(grade, round, {
           forceRefresh,
           repoIndex: indexOverride !== undefined ? indexOverride : repoIndex,
+          allowGitHub,
         });
         if (requestId === loadRequestIdRef.current) {
           setLoadedPool(pool);
@@ -64,10 +75,10 @@ export default function App() {
         }
       }
     },
-    [repoIndex]
+    [repoIndex, accountId]
   );
 
-  // Startup: Load history and automatically sync GitHub repo index + initial exam
+  // Startup: Load history and automatically sync GitHub repo index + initial exam (GitHub enabled only if account is valid for grade)
   useEffect(() => {
     const savedHistory = localStorage.getItem('oly_history');
     if (savedHistory) {
@@ -86,11 +97,13 @@ export default function App() {
       if (cancelled) return;
       setRepoIndex(index);
 
-      const initialGrade: GradeLevel = 4;
+      const savedAccount = localStorage.getItem('oly_account_id') || '';
+      const accountCheck = validateAccountId(savedAccount);
+      const initialGrade: GradeLevel = accountCheck.valid && accountCheck.grade ? accountCheck.grade : 4;
       let initialRound: ContestRound = 1;
 
-      // If Grade 4 doesn't have c1 yet on GitHub, auto-pick the first available GitHub round for Grade 4 (e.g. c2)
-      if (index && !index.apiLimited) {
+      // If account is authorized for initialGrade and c1 isn't on GitHub yet, auto-pick first available GitHub round for that grade
+      if (accountCheck.valid && index && !index.apiLimited) {
         const hasC1 = Boolean(index.availableMap[getExamKey(initialGrade, 1)]);
         if (!hasC1) {
           const firstForGrade = index.files.find((f) => f.grade === initialGrade);
@@ -102,7 +115,7 @@ export default function App() {
 
       setSelectedGrade(initialGrade);
       setSelectedRound(initialRound);
-      await loadPool(initialGrade, initialRound, index, false);
+      await loadPool(initialGrade, initialRound, index, false, savedAccount);
     };
 
     initGitHub();
@@ -112,11 +125,42 @@ export default function App() {
     };
   }, []);
 
+  const handleAccountIdChange = (newAccountId: string) => {
+    setAccountId(newAccountId);
+    if (newAccountId.trim()) {
+      localStorage.setItem('oly_account_id', newAccountId.trim());
+    } else {
+      localStorage.removeItem('oly_account_id');
+    }
+
+    const check = validateAccountId(newAccountId);
+    if (check.valid && (check.isAdmin || check.grade)) {
+      const targetGrade = check.isAdmin ? selectedGrade : check.grade!;
+      let targetRound = selectedRound;
+
+      if (repoIndex && !repoIndex.apiLimited) {
+        const hasCurrentRound = Boolean(repoIndex.availableMap[getExamKey(targetGrade, targetRound)]);
+        if (!hasCurrentRound) {
+          const firstForGrade = repoIndex.files.find((f) => f.grade === targetGrade);
+          if (firstForGrade) {
+            targetRound = firstForGrade.round;
+          }
+        }
+      }
+
+      setSelectedGrade(targetGrade);
+      setSelectedRound(targetRound);
+      loadPool(targetGrade, targetRound, repoIndex, false, newAccountId);
+    } else {
+      loadPool(selectedGrade, selectedRound, repoIndex, false, newAccountId);
+    }
+  };
+
   const handleSelectGrade = (newGrade: GradeLevel) => {
     let nextRound = selectedRound;
 
-    // If current round isn't on GitHub for this grade, auto-select the first available GitHub round for this grade
-    if (repoIndex && !repoIndex.apiLimited) {
+    // If authorized for newGrade and current round isn't on GitHub, auto-select the first available GitHub round
+    if (isAccountAuthorizedForGrade(accountId, newGrade) && repoIndex && !repoIndex.apiLimited) {
       const hasCurrentRound = Boolean(repoIndex.availableMap[getExamKey(newGrade, selectedRound)]);
       if (!hasCurrentRound) {
         const firstForGrade = repoIndex.files.find((f) => f.grade === newGrade);
@@ -128,25 +172,32 @@ export default function App() {
 
     setSelectedGrade(newGrade);
     setSelectedRound(nextRound);
-    loadPool(newGrade, nextRound, repoIndex, false);
+    loadPool(newGrade, nextRound, repoIndex, false, accountId);
   };
 
   const handleSelectRound = (newRound: ContestRound) => {
     setSelectedRound(newRound);
-    loadPool(selectedGrade, newRound, repoIndex, false);
+    loadPool(selectedGrade, newRound, repoIndex, false, accountId);
   };
 
   const handleRefreshGitHub = async () => {
     setIsLoadingPool(true);
     const freshIndex = await fetchGitHubRepoIndex(undefined, true);
     setRepoIndex(freshIndex);
-    await loadPool(selectedGrade, selectedRound, freshIndex, true);
+    await loadPool(selectedGrade, selectedRound, freshIndex, true, accountId);
   };
 
   const handleStartExam = async (config: ExamConfig) => {
+    const allowGitHub = isAccountAuthorizedForGrade(accountId, config.grade);
     let pool = loadedPool;
-    if (!pool || pool.grade !== config.grade || pool.round !== config.round) {
-      pool = await loadPool(config.grade, config.round, repoIndex, false);
+    if (
+      !pool ||
+      pool.grade !== config.grade ||
+      pool.round !== config.round ||
+      (!allowGitHub && (pool.source === 'github' || pool.source === 'merged')) ||
+      (allowGitHub && pool.source === 'test')
+    ) {
+      pool = await loadPool(config.grade, config.round, repoIndex, false, accountId);
     }
 
     const generated = generateExamQuestions(
@@ -181,6 +232,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 font-sans flex flex-col text-gray-900">
       <Header
+        isAdmin={isAdmin}
         onOpenHistory={() => setShowHistoryModal(true)}
         onOpenGitHubConfig={() => setShowGitHubModal(true)}
         onHome={() => setView('setup')}
@@ -191,12 +243,15 @@ export default function App() {
           <ExamSetup
             selectedGrade={selectedGrade}
             selectedRound={selectedRound}
+            accountId={accountId}
             repoIndex={repoIndex}
             loadedPool={loadedPool}
             isLoadingPool={isLoadingPool}
             onSelectGrade={handleSelectGrade}
             onSelectRound={handleSelectRound}
+            onChangeAccountId={handleAccountIdChange}
             onRefreshGitHub={handleRefreshGitHub}
+            onOpenGitHubConfig={() => setShowGitHubModal(true)}
             onStartExam={handleStartExam}
           />
         )}
@@ -238,7 +293,7 @@ export default function App() {
           onQuestionsLoaded={(newIndex) => {
             const nextIndex = newIndex !== undefined ? newIndex : repoIndex;
             setRepoIndex(nextIndex);
-            loadPool(selectedGrade, selectedRound, nextIndex, true);
+            loadPool(selectedGrade, selectedRound, nextIndex, true, accountId);
           }}
         />
       )}

@@ -1,14 +1,15 @@
 import React from 'react';
-import { History, Smile, CloudDownload } from 'lucide-react';
+import { History, Smile, CloudDownload, ShieldCheck } from 'lucide-react';
 import { soundFx } from '../utils/sound';
 
 interface HeaderProps {
+  isAdmin?: boolean;
   onOpenHistory: () => void;
   onOpenGitHubConfig: () => void;
   onHome: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onOpenHistory, onOpenGitHubConfig, onHome }) => {
+export const Header: React.FC<HeaderProps> = ({ isAdmin, onOpenHistory, onOpenGitHubConfig, onHome }) => {
   return (
     <header className="bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 text-white shadow-2xl sticky top-0 z-50 border-b-4 border-yellow-300">
       <div className="max-w-7xl mx-auto px-4 py-3.5 flex items-center justify-between">
@@ -35,7 +36,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenHistory, onOpenGitHubConfi
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-2 sm:space-x-3">
+          {isAdmin && (
+            <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-amber-300/25 border-2 border-amber-300 text-yellow-200 text-xs font-black shadow">
+              <ShieldCheck className="w-4 h-4 text-yellow-300" />
+              <span>ADMIN</span>
+            </span>
+          )}
+
           <button
             onClick={() => {
               soundFx.playClick();

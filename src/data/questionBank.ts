@@ -524,10 +524,12 @@ export async function loadQuestionsForSelection(
     forceRefresh?: boolean;
     repoIndex?: GitHubRepoIndex | null;
     repoUrlOverride?: string;
+    allowGitHub?: boolean;
   }
 ): Promise<LoadedExamPool> {
   const key = getExamKey(grade, round);
   const expectedFile = `${key}.json`;
+  const allowGitHub = options?.allowGitHub === true;
 
   if (options?.forceRefresh) {
     githubFileCache.delete(key);
@@ -538,59 +540,61 @@ export async function loadQuestionsForSelection(
   const customQuestions = getCustomQuestions();
   const matchingCustom = customQuestions.filter((q) => q.grade === grade && q.round === round);
 
-  // 2. Load GitHub questions matching grade & round
+  // 2. Load GitHub questions matching grade & round ONLY when account is authorized for this grade
   let matchingGithub: Question[] = [];
   let githubFileName = expectedFile;
   let githubLabel = 'GitHub';
 
-  const target = parseGitHubTarget(options?.repoUrlOverride || getConfiguredGitHubUrl());
+  if (allowGitHub) {
+    const target = parseGitHubTarget(options?.repoUrlOverride || getConfiguredGitHubUrl());
 
-  if (target.mode === 'raw-file' && target.rawFileUrl) {
-    const cacheKey = `raw:${target.rawFileUrl}`;
-    try {
-      let rawQuestions = githubFileCache.get(cacheKey);
-      if (!rawQuestions || options?.forceRefresh) {
-        rawQuestions = await fetchRawGitHubJson(target.rawFileUrl);
-        githubFileCache.set(cacheKey, rawQuestions);
-      }
-      matchingGithub = rawQuestions.filter((q) => q.grade === grade && q.round === round);
-      githubFileName = target.rawFileUrl.split('/').pop() || 'questions.json';
-      githubLabel = 'GitHub Raw JSON';
-    } catch (err) {
-      console.warn('Failed to fetch custom raw GitHub URL:', err);
-    }
-  } else if (target.mode === 'repo' && target.owner && target.repo) {
-    const repoIndex = options?.repoIndex !== undefined ? options.repoIndex : cachedRepoIndex;
-    const indexedEntry = repoIndex?.availableMap?.[key];
-
-    const shouldAttemptFetch =
-      options?.forceRefresh || !repoIndex || repoIndex.apiLimited || Boolean(indexedEntry);
-
-    if (shouldAttemptFetch) {
-      const rawUrl =
-        indexedEntry?.rawUrl ||
-        `https://raw.githubusercontent.com/${target.owner}/${target.repo}/${
-          target.branch || DEFAULT_GITHUB_BRANCH
-        }/${expectedFile}`;
-
-      const cacheKey = `${target.owner}/${target.repo}/${key}`;
-
+    if (target.mode === 'raw-file' && target.rawFileUrl) {
+      const cacheKey = `raw:${target.rawFileUrl}`;
       try {
-        let ghQuestions = githubFileCache.get(cacheKey);
-        if (!ghQuestions || options?.forceRefresh) {
-          ghQuestions = await fetchRawGitHubJson(rawUrl, grade, round);
-          if (ghQuestions.length > 0) {
-            githubFileCache.set(cacheKey, ghQuestions);
-          }
+        let rawQuestions = githubFileCache.get(cacheKey);
+        if (!rawQuestions || options?.forceRefresh) {
+          rawQuestions = await fetchRawGitHubJson(target.rawFileUrl);
+          githubFileCache.set(cacheKey, rawQuestions);
         }
-
-        if (ghQuestions && ghQuestions.length > 0) {
-          matchingGithub = ghQuestions;
-          githubFileName = indexedEntry?.filename || expectedFile;
-          githubLabel = `GitHub (${target.owner}/${target.repo})`;
-        }
+        matchingGithub = rawQuestions.filter((q) => q.grade === grade && q.round === round);
+        githubFileName = target.rawFileUrl.split('/').pop() || 'questions.json';
+        githubLabel = 'GitHub Raw JSON';
       } catch (err) {
-        console.info(`No GitHub exam found at ${rawUrl}.`);
+        console.warn('Failed to fetch custom raw GitHub URL:', err);
+      }
+    } else if (target.mode === 'repo' && target.owner && target.repo) {
+      const repoIndex = options?.repoIndex !== undefined ? options.repoIndex : cachedRepoIndex;
+      const indexedEntry = repoIndex?.availableMap?.[key];
+
+      const shouldAttemptFetch =
+        options?.forceRefresh || !repoIndex || repoIndex.apiLimited || Boolean(indexedEntry);
+
+      if (shouldAttemptFetch) {
+        const rawUrl =
+          indexedEntry?.rawUrl ||
+          `https://raw.githubusercontent.com/${target.owner}/${target.repo}/${
+            target.branch || DEFAULT_GITHUB_BRANCH
+          }/${expectedFile}`;
+
+        const cacheKey = `${target.owner}/${target.repo}/${key}`;
+
+        try {
+          let ghQuestions = githubFileCache.get(cacheKey);
+          if (!ghQuestions || options?.forceRefresh) {
+            ghQuestions = await fetchRawGitHubJson(rawUrl, grade, round);
+            if (ghQuestions.length > 0) {
+              githubFileCache.set(cacheKey, ghQuestions);
+            }
+          }
+
+          if (ghQuestions && ghQuestions.length > 0) {
+            matchingGithub = ghQuestions;
+            githubFileName = indexedEntry?.filename || expectedFile;
+            githubLabel = `GitHub (${target.owner}/${target.repo})`;
+          }
+        } catch (err) {
+          console.info(`No GitHub exam found at ${rawUrl}.`);
+        }
       }
     }
   }

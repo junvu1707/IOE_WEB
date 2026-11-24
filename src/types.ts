@@ -61,6 +61,7 @@ export interface LoadedExamPool {
 
 export interface ExamConfig {
   studentName: string;
+  accountId?: string;
   grade: GradeLevel;
   round: ContestRound;
   questionCount: number; // e.g. 20, 50, 100, 200
