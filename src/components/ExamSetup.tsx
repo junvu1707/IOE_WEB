@@ -8,8 +8,6 @@ import {
   FileText,
   Play,
   Rocket,
-  RefreshCw,
-  CheckCircle2,
 } from 'lucide-react';
 import { soundFx } from '../utils/sound';
 
@@ -27,41 +25,36 @@ interface ExamSetupProps {
 
 const ROUND_NAMES: Record<
   ContestRound,
-  { name: string; badge: string; emoji: string; desc: string; color: string }
+  { name: string; badge: string; emoji: string; color: string }
 > = {
   1: {
-    name: 'Vòng Loại',
+    name: 'Khởi động',
     badge: 'Cấp 1',
     emoji: '🌱',
-    desc: 'Khởi động thử tài từ vựng',
     color: 'from-emerald-500 to-teal-600',
   },
   2: {
-    name: 'Vòng Trường',
+    name: 'Vượt chướng ngại vật',
     badge: 'Cấp 2',
     emoji: '🎒',
-    desc: 'Chinh phục kiến thức học kỳ',
     color: 'from-blue-500 to-indigo-600',
   },
   3: {
-    name: 'Vòng Phường / Quận',
+    name: 'Tranh tài',
     badge: 'Cấp 3',
     emoji: '🏅',
-    desc: 'Tranh tài gay cấn cấp quận',
     color: 'from-purple-500 to-violet-600',
   },
   4: {
-    name: 'Vòng Tỉnh / TP',
+    name: 'Tăng tốc',
     badge: 'Cấp 4',
     emoji: '🏆',
-    desc: 'Đỉnh cao trí tuệ tỉnh thành',
     color: 'from-amber-500 to-orange-600',
   },
   5: {
-    name: 'Vòng Quốc Gia',
+    name: 'Chinh phục đỉnh cao',
     badge: 'Cấp 5',
     emoji: '👑',
-    desc: 'Vinh quang Trạng nguyên toàn quốc',
     color: 'from-rose-500 to-pink-600',
   },
 };
@@ -236,7 +229,6 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                     >
                       {info.name}
                     </h4>
-                    <p className="text-xs text-gray-500 font-medium leading-snug">{info.desc}</p>
                   </button>
                 );
               })}
@@ -284,48 +276,6 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 <option value={60}>60 phút (Thoải mái)</option>
               </select>
             </div>
-          </div>
-
-          {/* 5. Live Loaded Exam Count Banner */}
-          <div
-            className={`rounded-2xl p-4 border-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
-              isLoadingPool
-                ? 'bg-indigo-50 border-indigo-200 text-indigo-900'
-                : 'bg-emerald-50 border-emerald-300 text-emerald-950'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              {isLoadingPool ? (
-                <RefreshCw className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
-              ) : (
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-              )}
-              <div className="text-sm">
-                {isLoadingPool ? (
-                  <p className="font-bold">Đang cập nhật ngân hàng đề...</p>
-                ) : loadedPool ? (
-                  <p className="font-extrabold flex items-center gap-2 flex-wrap">
-                    <span>Tổng số câu hỏi trong kho đề:</span>
-                    <span className="px-2.5 py-0.5 rounded-lg text-sm font-black bg-white border border-emerald-300 text-emerald-800">
-                      {loadedPool.questions.length} câu
-                    </span>
-                  </p>
-                ) : null}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              disabled={isLoadingPool}
-              onClick={() => {
-                soundFx.playClick();
-                onRefreshGitHub();
-              }}
-              className="px-3.5 py-2 bg-white hover:bg-gray-50 text-gray-800 rounded-xl text-xs font-black border border-gray-300 shadow-sm flex items-center gap-1.5 self-start sm:self-center shrink-0 transition cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingPool ? 'animate-spin' : ''}`} />
-              <span>Cập nhật đề</span>
-            </button>
           </div>
 
           {/* Start Button */}

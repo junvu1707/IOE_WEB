@@ -480,8 +480,42 @@ async function fetchRawGitHubJson(
 }
 
 /**
+ * Merge GitHub and user-uploaded questions into a single deduplicated pool
+ * so random exam generation draws from both sources simultaneously.
+ */
+function mergeQuestionPools(githubQuestions: Question[], customQuestions: Question[]): Question[] {
+  const merged: Question[] = [];
+  const seenContent = new Set<string>();
+  const usedIds = new Set<string>();
+
+  const makeFingerprint = (q: Question): string => {
+    const qText = q.question.trim().toLowerCase();
+    const ans = q.type === 'noi' ? JSON.stringify(q.matchingPairs || []) : String(q.correct || '').trim().toLowerCase();
+    return `${q.type}::${qText}::${ans}`;
+  };
+
+  for (const q of [...githubQuestions, ...customQuestions]) {
+    const fp = makeFingerprint(q);
+    if (seenContent.has(fp)) continue;
+    seenContent.add(fp);
+
+    let uniqueId = q.id;
+    let suffix = 1;
+    while (usedIds.has(uniqueId)) {
+      uniqueId = `${q.id}_u${suffix++}`;
+    }
+    usedIds.add(uniqueId);
+
+    merged.push(uniqueId === q.id ? q : { ...q, id: uniqueId });
+  }
+
+  return merged;
+}
+
+/**
  * Load the question pool for a specific Grade & Round.
- * Priority: Custom JSON (if matching grade & round) -> GitHub Repo (l{grade}_c{round}.json) -> Built-in Test Mode.
+ * Simultaneously combines GitHub Repo (l{grade}_c{round}.json) + Custom Uploaded/Pasted JSON,
+ * falling back to Built-in Test Mode only when neither source has questions for this grade & round.
  */
 export async function loadQuestionsForSelection(
   grade: GradeLevel,
@@ -500,22 +534,15 @@ export async function loadQuestionsForSelection(
     sessionCacheNonce = Date.now();
   }
 
-  // 1. Check Custom Uploaded/Pasted JSON for matching grade & round
+  // 1. Load Custom Uploaded/Pasted JSON matching grade & round
   const customQuestions = getCustomQuestions();
   const matchingCustom = customQuestions.filter((q) => q.grade === grade && q.round === round);
-  if (matchingCustom.length > 0) {
-    return {
-      grade,
-      round,
-      questions: matchingCustom,
-      source: 'custom',
-      sourceLabel: `File JSON tùy chỉnh (${matchingCustom.length} câu)`,
-      fileName: 'custom.json',
-      typeCounts: countQuestionTypes(matchingCustom),
-    };
-  }
 
-  // 2. Priority GitHub
+  // 2. Load GitHub questions matching grade & round
+  let matchingGithub: Question[] = [];
+  let githubFileName = expectedFile;
+  let githubLabel = 'GitHub';
+
   const target = parseGitHubTarget(options?.repoUrlOverride || getConfiguredGitHubUrl());
 
   if (target.mode === 'raw-file' && target.rawFileUrl) {
@@ -526,18 +553,9 @@ export async function loadQuestionsForSelection(
         rawQuestions = await fetchRawGitHubJson(target.rawFileUrl);
         githubFileCache.set(cacheKey, rawQuestions);
       }
-      const matching = rawQuestions.filter((q) => q.grade === grade && q.round === round);
-      if (matching.length > 0) {
-        return {
-          grade,
-          round,
-          questions: matching,
-          source: 'github',
-          sourceLabel: `GitHub Raw JSON`,
-          fileName: target.rawFileUrl.split('/').pop() || 'questions.json',
-          typeCounts: countQuestionTypes(matching),
-        };
-      }
+      matchingGithub = rawQuestions.filter((q) => q.grade === grade && q.round === round);
+      githubFileName = target.rawFileUrl.split('/').pop() || 'questions.json';
+      githubLabel = 'GitHub Raw JSON';
     } catch (err) {
       console.warn('Failed to fetch custom raw GitHub URL:', err);
     }
@@ -545,7 +563,6 @@ export async function loadQuestionsForSelection(
     const repoIndex = options?.repoIndex !== undefined ? options.repoIndex : cachedRepoIndex;
     const indexedEntry = repoIndex?.availableMap?.[key];
 
-    // If repo index loaded cleanly (not rate-limited) and file is definitely absent, skip unnecessary 404 fetch unless forceRefresh
     const shouldAttemptFetch =
       options?.forceRefresh || !repoIndex || repoIndex.apiLimited || Boolean(indexedEntry);
 
@@ -568,31 +585,48 @@ export async function loadQuestionsForSelection(
         }
 
         if (ghQuestions && ghQuestions.length > 0) {
-          return {
-            grade,
-            round,
-            questions: ghQuestions,
-            source: 'github',
-            sourceLabel: `GitHub (${target.owner}/${target.repo})`,
-            fileName: indexedEntry?.filename || expectedFile,
-            typeCounts: countQuestionTypes(ghQuestions),
-          };
+          matchingGithub = ghQuestions;
+          githubFileName = indexedEntry?.filename || expectedFile;
+          githubLabel = `GitHub (${target.owner}/${target.repo})`;
         }
       } catch (err) {
-        // 404 is expected for grades/rounds not yet uploaded to GitHub -> smoothly fall back to Test Mode
-        console.info(`No GitHub exam found at ${rawUrl}, switching to Test Mode.`);
+        console.info(`No GitHub exam found at ${rawUrl}.`);
       }
     }
   }
 
-  // 3. Fallback to Test Mode
+  // 3. Combine BOTH sources simultaneously (GitHub + Custom Uploaded JSON)
+  const combined = mergeQuestionPools(matchingGithub, matchingCustom);
+
+  if (combined.length > 0) {
+    const hasGithub = matchingGithub.length > 0;
+    const hasCustom = matchingCustom.length > 0;
+    const source: ExamSourceType = hasGithub && hasCustom ? 'merged' : hasGithub ? 'github' : 'custom';
+
+    return {
+      grade,
+      round,
+      questions: combined,
+      source,
+      sourceLabel:
+        source === 'merged'
+          ? `Kết hợp GitHub + File tải lên (${combined.length} câu)`
+          : source === 'github'
+          ? githubLabel
+          : `File JSON tùy chỉnh (${combined.length} câu)`,
+      fileName: hasGithub ? githubFileName : 'custom.json',
+      typeCounts: countQuestionTypes(combined),
+    };
+  }
+
+  // 4. Fallback to Test Mode only if both sources have no questions for this grade & round
   const testQuestions = defaultTestBank.filter((q) => q.grade === grade && q.round === round);
   return {
     grade,
     round,
     questions: testQuestions,
     source: 'test',
-    sourceLabel: `Chế độ Test Mode (chưa có ${expectedFile} trên GitHub)`,
+    sourceLabel: `Chế độ Test Mode (${testQuestions.length} câu)`,
     fileName: expectedFile,
     typeCounts: countQuestionTypes(testQuestions),
   };

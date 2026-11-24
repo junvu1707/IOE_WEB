@@ -1,8 +1,58 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ExamResultData, Question } from '../types';
-import { X, Trophy, Clock, Calendar, GraduationCap, Eye, CheckCircle2, XCircle } from 'lucide-react';
+import { X, Trophy, Calendar, GraduationCap, Eye, CheckCircle2, XCircle, TrendingUp } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ReferenceLine,
+} from 'recharts';
 import { soundFx } from '../utils/sound';
 import { FormattedText } from './FormattedText';
+
+interface ScoreChartPoint {
+  label: string;
+  percentage: number;
+  score: number;
+  totalQuestions: number;
+  roundName: string;
+  grade: number;
+  studentName: string;
+  dateTime: string;
+}
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: Array<{ payload: ScoreChartPoint }>;
+}
+
+const ScoreTooltip: React.FC<CustomTooltipProps> = ({ active, payload }) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const data = payload[0].payload;
+
+  return (
+    <div className="bg-white/95 backdrop-blur-sm border-2 border-purple-300 rounded-2xl p-3 shadow-xl text-xs space-y-1 max-w-[230px]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-black text-purple-950">{data.roundName}</span>
+        <span className="px-2 py-0.5 bg-purple-100 text-purple-800 rounded-md font-extrabold">
+          Lớp {data.grade}
+        </span>
+      </div>
+      <p className="text-gray-600 font-semibold">Thí sinh: {data.studentName}</p>
+      <div className="pt-1 border-t border-purple-100 flex items-baseline justify-between gap-3">
+        <span className="font-bold text-gray-500">Điểm số:</span>
+        <span className="font-black text-sm text-pink-600">
+          {data.score}/{data.totalQuestions} ({data.percentage}%)
+        </span>
+      </div>
+      <p className="text-[11px] text-gray-400 font-medium">{data.dateTime}</p>
+    </div>
+  );
+};
 
 function formatHistoryAnswer(q: Question, userAns: any): string {
   if (!userAns || userAns === '(Chưa trả lời)') return '(Chưa trả lời)';
@@ -22,6 +72,36 @@ interface HistoryModalProps {
 
 export const HistoryModal: React.FC<HistoryModalProps> = ({ history, onClose, onClearHistory }) => {
   const [selectedAttempt, setSelectedAttempt] = useState<ExamResultData | null>(null);
+
+  const chartData = useMemo<ScoreChartPoint[]>(() => {
+    const recent = history.slice(0, 10).reverse();
+    return recent.map((item, idx) => {
+      const dt = new Date(item.completedAt);
+      const dateStr = dt.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+      const timeStr = dt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      return {
+        label: `Bài ${idx + 1}`,
+        percentage: item.percentage,
+        score: item.score,
+        totalQuestions: item.totalQuestions,
+        roundName: item.roundName,
+        grade: item.grade,
+        studentName: item.studentName,
+        dateTime: `${dateStr} • ${timeStr}`,
+      };
+    });
+  }, [history]);
+
+  const averagePercentage = useMemo(() => {
+    if (chartData.length === 0) return 0;
+    const sum = chartData.reduce((acc, item) => acc + item.percentage, 0);
+    return Math.round(sum / chartData.length);
+  }, [chartData]);
+
+  const bestPercentage = useMemo(() => {
+    if (chartData.length === 0) return 0;
+    return Math.max(...chartData.map((item) => item.percentage));
+  }, [chartData]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -163,7 +243,77 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({ history, onClose, on
               <p className="text-gray-500 text-sm mt-1">Hãy hoàn thành các bài thi để lưu lại lịch sử chi tiết tại đây.</p>
             </div>
           ) : (
-            history.map((item, idx) => (
+            <div className="space-y-5">
+              {/* Score Progression Chart (Last 10 Exams) */}
+              <div className="bg-gradient-to-br from-purple-50/80 via-white to-pink-50/70 border-2 border-purple-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-pink-500 to-purple-600 text-white flex items-center justify-center shadow-sm">
+                      <TrendingUp className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="font-black text-purple-950 text-sm sm:text-base">
+                        Biểu Đồ Tiến Bộ Điểm Số ({chartData.length} bài gần nhất)
+                      </h4>
+                      <p className="text-[11px] text-gray-500 font-medium">
+                        Theo dõi tỷ lệ trả lời đúng (%) qua các lần thi gần đây
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs font-extrabold">
+                    <span className="px-2.5 py-1 rounded-xl bg-purple-100 text-purple-800">
+                      TB: {averagePercentage}%
+                    </span>
+                    <span className="px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-800">
+                      Cao nhất: {bestPercentage}%
+                    </span>
+                  </div>
+                </div>
+
+                <div className="w-full h-56 pt-1">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{ top: 10, right: 16, left: -12, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e9d5ff" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 11, fill: '#6b21a8', fontWeight: 700 }}
+                        axisLine={{ stroke: '#d8b4fe' }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        ticks={[0, 25, 50, 75, 100]}
+                        tickFormatter={(v) => `${v}%`}
+                        tick={{ fontSize: 11, fill: '#6b7280', fontWeight: 600 }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <Tooltip content={<ScoreTooltip />} />
+                      {chartData.length > 1 && (
+                        <ReferenceLine
+                          y={averagePercentage}
+                          stroke="#c084fc"
+                          strokeDasharray="4 4"
+                          strokeWidth={1.5}
+                        />
+                      )}
+                      <Line
+                        type="monotone"
+                        dataKey="percentage"
+                        name="Điểm (%)"
+                        stroke="#9333ea"
+                        strokeWidth={3}
+                        dot={{ r: 5, fill: '#ec4899', stroke: '#ffffff', strokeWidth: 2 }}
+                        activeDot={{ r: 7, fill: '#9333ea', stroke: '#fde047', strokeWidth: 3 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Exam History List */}
+              <div className="space-y-3">
+                {history.map((item, idx) => (
               <div
                 key={item.id || idx}
                 className="bg-purple-50/40 hover:bg-purple-50 border-2 border-purple-200 rounded-2xl p-4 transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm"
@@ -205,7 +355,9 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({ history, onClose, on
                   </button>
                 </div>
               </div>
-            ))
+            ))}
+              </div>
+            </div>
           )}
         </div>
 

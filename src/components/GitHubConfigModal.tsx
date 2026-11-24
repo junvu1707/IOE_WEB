@@ -34,7 +34,6 @@ export const GitHubConfigModal: React.FC<GitHubConfigModalProps> = ({
 
     try {
       const targetUrl = url.trim() || DEFAULT_GITHUB_REPO;
-      localStorage.removeItem('oly_custom_json');
       localStorage.setItem('oly_github_url', targetUrl);
       clearGitHubCache();
 
@@ -80,7 +79,7 @@ export const GitHubConfigModal: React.FC<GitHubConfigModalProps> = ({
       localStorage.setItem('oly_custom_json', jsonInput.trim());
       setStatusMsg({
         success: true,
-        text: `Đã lưu thành công ${normalized.length} câu hỏi từ JSON tùy chỉnh! Các lớp/vòng khác vẫn tự động tải từ GitHub.`,
+        text: `Đã lưu thành công ${normalized.length} câu hỏi tải lên! Khi vào thi, hệ thống sẽ gộp chung với kho đề GitHub để sinh đề ngẫu nhiên từ cả 2 nguồn.`,
       });
       onQuestionsLoaded(localIndex);
     } catch (err: any) {
@@ -133,7 +132,7 @@ export const GitHubConfigModal: React.FC<GitHubConfigModalProps> = ({
 
       setStatusMsg({
         success: true,
-        text: `Đã tải và gộp thành công ${files.length} file JSON! Tổng số câu hỏi tùy chỉnh: ${allMergedQuestions.length}.`,
+        text: `Đã tải và gộp thành công ${files.length} file JSON (${allMergedQuestions.length} câu)! Các câu hỏi này sẽ được trộn ngẫu nhiên đồng thời cùng kho đề GitHub.`,
       });
       onQuestionsLoaded(localIndex);
     } catch (err: any) {
@@ -264,14 +263,33 @@ export const GitHubConfigModal: React.FC<GitHubConfigModalProps> = ({
                 className="w-full p-4 rounded-xl border-2 border-gray-200 focus:border-purple-600 outline-none font-mono text-xs text-gray-800 bg-gray-50"
               />
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm shadow-md transition flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {loading && <RefreshCw className="w-4 h-4 animate-spin" />}
-                <span>Lưu & Gộp bộ đề JSON tùy chỉnh</span>
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm shadow-md transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {loading && <RefreshCw className="w-4 h-4 animate-spin" />}
+                  <span>Lưu & Gộp cùng kho GitHub</span>
+                </button>
+                {jsonInput.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      localStorage.removeItem('oly_custom_json');
+                      setJsonInput('');
+                      setStatusMsg({
+                        success: true,
+                        text: 'Đã xóa bộ đề tải lên. Hệ thống hiện chỉ dùng kho đề GitHub.',
+                      });
+                      onQuestionsLoaded(localIndex);
+                    }}
+                    className="px-4 py-3 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold rounded-xl text-sm transition cursor-pointer"
+                  >
+                    Xóa đề tải lên
+                  </button>
+                )}
+              </div>
             </form>
           )}
 

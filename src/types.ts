@@ -4,7 +4,7 @@ export type ContestRound = 1 | 2 | 3 | 4 | 5; // 1: Loại, 2: Trường, 3: Ph�
 
 export type QuestionType = 'tn' | 'noi' | 'dt' | 'sx'; // Trắc nghiệm, Nối vế, Điền từ, Sắp xếp câu
 
-export type ExamSourceType = 'github' | 'custom' | 'test';
+export type ExamSourceType = 'github' | 'custom' | 'merged' | 'test';
 
 export interface MatchingPair {
   id: string;

@@ -50,8 +50,9 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const submittedRef = useRef(false);
 
-  // For interactive matching question: selected left item ID
+  // For interactive matching question: selected left or right item
   const [selectedMatchLeft, setSelectedMatchLeft] = useState<string | null>(null);
+  const [selectedMatchRight, setSelectedMatchRight] = useState<string | null>(null);
 
   const currentQ = questions[currentIndex];
 
@@ -61,6 +62,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
   useEffect(() => {
     setSelectedMatchLeft(null);
+    setSelectedMatchRight(null);
   }, [currentIndex]);
 
   useEffect(() => {
@@ -158,11 +160,11 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
     const percentage = questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0;
     const roundNamesMap: Record<number, string> = {
-      1: 'Vòng Loại',
-      2: 'Vòng Trường',
-      3: 'Vòng Phường/Quận',
-      4: 'Vòng Tỉnh/Thành phố',
-      5: 'Vòng Quốc Gia',
+      1: 'Khởi động',
+      2: 'Vượt chướng ngại vật',
+      3: 'Tranh tài',
+      4: 'Tăng tốc',
+      5: 'Chinh phục đỉnh cao',
     };
 
     if (percentage >= 50) soundFx.playSuccess();
@@ -370,12 +372,77 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           ? currentQ.rightOptions
           : currentQ.matchingPairs.map((p) => p.right);
 
+      const connectPair = (leftId: string, rightText: string) => {
+        const newMap: Record<string, string> = {};
+        // Keep existing connections except any old link using this leftId or rightText (enforce 1-to-1)
+        Object.entries(userPairMap).forEach(([k, v]) => {
+          if (k !== leftId && v !== rightText) {
+            newMap[k] = v;
+          }
+        });
+        newMap[leftId] = rightText;
+        soundFx.playSuccess();
+        handleAnswerChange(currentQ.id, newMap, false);
+        setSelectedMatchLeft(null);
+        setSelectedMatchRight(null);
+      };
+
+      const handleLeftClick = (leftId: string) => {
+        // Click 2nd time on same selected left item -> deselect
+        if (selectedMatchLeft === leftId) {
+          soundFx.playClick();
+          setSelectedMatchLeft(null);
+          return;
+        }
+        // If a right item is already selected -> connect them
+        if (selectedMatchRight !== null) {
+          connectPair(leftId, selectedMatchRight);
+          return;
+        }
+        // If already connected -> click to unconnect
+        if (userPairMap[leftId]) {
+          soundFx.playClick();
+          const newMap = { ...userPairMap };
+          delete newMap[leftId];
+          handleAnswerChange(currentQ.id, newMap, false);
+          return;
+        }
+        // Click 1st time -> select this left item
+        soundFx.playClick();
+        setSelectedMatchLeft(leftId);
+      };
+
+      const handleRightClick = (rightText: string, connectedLeftId?: string) => {
+        // Click 2nd time on same selected right item -> deselect
+        if (selectedMatchRight === rightText) {
+          soundFx.playClick();
+          setSelectedMatchRight(null);
+          return;
+        }
+        // If a left item is already selected -> connect them
+        if (selectedMatchLeft !== null) {
+          connectPair(selectedMatchLeft, rightText);
+          return;
+        }
+        // If already connected -> click to unconnect
+        if (connectedLeftId) {
+          soundFx.playClick();
+          const newMap = { ...userPairMap };
+          delete newMap[connectedLeftId];
+          handleAnswerChange(currentQ.id, newMap, false);
+          return;
+        }
+        // Click 1st time -> select this right item
+        soundFx.playClick();
+        setSelectedMatchRight(rightText);
+      };
+
       return (
         <div className="mt-6 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <p className="text-sm font-black text-purple-900 flex items-center gap-1.5">
               <Link2 className="w-4 h-4 text-purple-600" />
-              <span>Nối cột trái với cột phải (Các cặp đã nối sẽ có màu giống nhau):</span>
+              <span>Chạm 1 lần để chọn nối, chạm lần 2 tại ô đó để bỏ chọn (các cặp nối có màu giống nhau):</span>
             </p>
             {Object.keys(userPairMap).length > 0 && (
               <button
@@ -384,6 +451,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                   soundFx.playClick();
                   handleAnswerChange(currentQ.id, {});
                   setSelectedMatchLeft(null);
+                  setSelectedMatchRight(null);
                 }}
                 className="text-xs font-bold text-pink-600 hover:text-pink-700 flex items-center gap-1 cursor-pointer bg-pink-50 px-2.5 py-1 rounded-xl border border-pink-200"
               >
@@ -408,15 +476,14 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                 return (
                   <div
                     key={pair.id}
-                    onClick={() => {
-                      soundFx.playClick();
-                      setSelectedMatchLeft(pair.id);
-                    }}
+                    onClick={() => handleLeftClick(pair.id)}
                     className={`p-4 rounded-2xl border-3 transition-all cursor-pointer flex items-center justify-between gap-3 shadow-md ${
                       isSelected
                         ? 'bg-purple-600 border-yellow-300 text-white ring-4 ring-purple-200 scale-[1.02]'
                         : isConnected
                         ? `${theme.bg} ${theme.border} ${theme.text} shadow-sm ring-2 ring-current/20`
+                        : selectedMatchRight
+                        ? 'bg-purple-50 border-purple-400 hover:border-purple-600 text-purple-950 animate-pulse'
                         : 'bg-white border-purple-200 hover:border-purple-400 text-purple-950 hover:bg-purple-50/50'
                     }`}
                   >
@@ -439,9 +506,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
                     {isConnected ? (
                       <span
-                        className={`text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 shrink-0 ${
-                          isConnected ? theme.lightBadge : ''
-                        }`}
+                        className={`text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 shrink-0 ${theme.lightBadge}`}
                       >
                         <Check className="w-3 h-3" />
                         <span className="truncate max-w-[130px]">
@@ -451,10 +516,14 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                     ) : (
                       <span
                         className={`text-xs font-bold px-2 py-0.5 rounded-lg shrink-0 ${
-                          isSelected ? 'bg-yellow-300 text-purple-950 animate-pulse' : 'text-gray-400 bg-gray-100'
+                          isSelected
+                            ? 'bg-yellow-300 text-purple-950'
+                            : selectedMatchRight
+                            ? 'bg-purple-200 text-purple-900'
+                            : 'text-gray-400 bg-gray-100'
                         }`}
                       >
-                        {isSelected ? 'Đang chọn 👆' : 'Chạm nối'}
+                        {isSelected ? 'Bỏ chọn ✕' : selectedMatchRight ? 'Nhấn nối 👈' : 'Chạm chọn'}
                       </span>
                     )}
                   </div>
@@ -472,6 +541,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                   (lId) => userPairMap[lId] === rightText
                 );
                 const isConnected = Boolean(connectedLeftId);
+                const isSelected = selectedMatchRight === rightText;
                 const matchingPairIdx = connectedLeftId
                   ? currentQ.matchingPairs?.findIndex((p) => p.id === connectedLeftId) ?? -1
                   : -1;
@@ -483,28 +553,25 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                 return (
                   <div
                     key={`${rIdx}_${rightText}`}
-                    onClick={() => {
-                      if (!selectedMatchLeft) {
-                        soundFx.playError();
-                        return;
-                      }
-                      soundFx.playSuccess();
-                      const newMap = { ...userPairMap, [selectedMatchLeft]: rightText };
-                      handleAnswerChange(currentQ.id, newMap);
-                      setSelectedMatchLeft(null);
-                    }}
-                    className={`p-4 rounded-2xl border-3 transition-all flex items-center justify-between gap-3 shadow-md ${
-                      isConnected && theme
+                    onClick={() => handleRightClick(rightText, connectedLeftId)}
+                    className={`p-4 rounded-2xl border-3 transition-all cursor-pointer flex items-center justify-between gap-3 shadow-md ${
+                      isSelected
+                        ? 'bg-indigo-600 border-yellow-300 text-white ring-4 ring-indigo-200 scale-[1.02]'
+                        : isConnected && theme
                         ? `${theme.bg} ${theme.border} ${theme.text} shadow-sm ring-2 ring-current/20`
                         : selectedMatchLeft
-                        ? 'bg-indigo-50 border-indigo-400 hover:border-indigo-600 text-indigo-950 cursor-pointer animate-pulse'
-                        : 'bg-white border-purple-200 text-purple-950 opacity-90'
+                        ? 'bg-indigo-50 border-indigo-400 hover:border-indigo-600 text-indigo-950 animate-pulse'
+                        : 'bg-white border-purple-200 hover:border-indigo-400 text-purple-950 hover:bg-indigo-50/40'
                     }`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <span
                         className={`w-8 h-8 rounded-xl font-black text-sm flex items-center justify-center shrink-0 ${
-                          isConnected && theme ? theme.badge : 'bg-indigo-100 text-indigo-700'
+                          isSelected
+                            ? 'bg-yellow-300 text-indigo-950'
+                            : isConnected && theme
+                            ? theme.badge
+                            : 'bg-indigo-100 text-indigo-700'
                         }`}
                       >
                         {rIdx + 1}
@@ -527,7 +594,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                             soundFx.playClick();
                             const newMap = { ...userPairMap };
                             delete newMap[connectedLeftId!];
-                            handleAnswerChange(currentQ.id, newMap);
+                            handleAnswerChange(currentQ.id, newMap, false);
                           }}
                           className="w-7 h-7 rounded-lg bg-red-100 hover:bg-red-200 text-red-600 flex items-center justify-center transition cursor-pointer"
                           title="Hủy kết nối"
@@ -536,8 +603,16 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                         </button>
                       </div>
                     ) : (
-                      <span className="text-xs font-semibold text-gray-400 bg-gray-100 px-2.5 py-1 rounded-lg shrink-0">
-                        {selectedMatchLeft ? 'Nhấn nối 👉' : 'Chưa nối'}
+                      <span
+                        className={`text-xs font-bold px-2.5 py-1 rounded-lg shrink-0 ${
+                          isSelected
+                            ? 'bg-yellow-300 text-indigo-950'
+                            : selectedMatchLeft
+                            ? 'bg-indigo-200 text-indigo-900'
+                            : 'text-gray-400 bg-gray-100'
+                        }`}
+                      >
+                        {isSelected ? 'Bỏ chọn ✕' : selectedMatchLeft ? 'Nhấn nối 👉' : 'Chạm chọn'}
                       </span>
                     )}
                   </div>
@@ -566,7 +641,15 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           <div>
             <h3 className="font-black text-purple-950 text-lg">{config.studentName}</h3>
             <p className="text-xs text-purple-600 font-bold">
-              Lớp {config.grade} • Vòng {config.round}
+              Lớp {config.grade} • Cấp {config.round} ({
+                ({
+                  1: 'Khởi động',
+                  2: 'Vượt chướng ngại vật',
+                  3: 'Tranh tài',
+                  4: 'Tăng tốc',
+                  5: 'Chinh phục đỉnh cao',
+                } as Record<number, string>)[config.round] || `Vòng ${config.round}`
+              })
             </p>
           </div>
         </div>
