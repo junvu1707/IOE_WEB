@@ -1,0 +1,6 @@
+{
+  "name": "OlyEnglish - Đấu Trường Tiếng Anh Học Sinh",
+  "description": "Nền tảng thi và luyện thi tiếng Anh trực tuyến từ lớp 1 đến lớp 9 với 5 vòng thi, 4 dạng bài và phân tích thông minh.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
