@@ -1,18 +1,32 @@
 import React from 'react';
-import { History, Smile, CloudDownload, ShieldCheck } from 'lucide-react';
+import { User } from 'firebase/auth';
+import { History, Smile, CloudDownload, ShieldCheck, LogIn, LogOut } from 'lucide-react';
 import { soundFx } from '../utils/sound';
 
 interface HeaderProps {
+  user: User | null;
   isAdmin?: boolean;
+  onSignIn: () => void;
+  onSignOut: () => void;
+  onOpenAdminDashboard: () => void;
   onOpenHistory: () => void;
   onOpenGitHubConfig: () => void;
   onHome: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ isAdmin, onOpenHistory, onOpenGitHubConfig, onHome }) => {
+export const Header: React.FC<HeaderProps> = ({
+  user,
+  isAdmin,
+  onSignIn,
+  onSignOut,
+  onOpenAdminDashboard,
+  onOpenHistory,
+  onOpenGitHubConfig,
+  onHome,
+}) => {
   return (
     <header className="bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 text-white shadow-2xl sticky top-0 z-50 border-b-4 border-yellow-300">
-      <div className="max-w-7xl mx-auto px-4 py-3.5 flex items-center justify-between">
+      <div className="max-w-7xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
         <div
           onClick={() => {
             soundFx.playClick();
@@ -36,35 +50,73 @@ export const Header: React.FC<HeaderProps> = ({ isAdmin, onOpenHistory, onOpenGi
           </div>
         </div>
 
-        <div className="flex items-center space-x-2 sm:space-x-3">
+        <div className="flex items-center flex-wrap gap-2 sm:gap-2.5">
           {isAdmin && (
-            <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-amber-300/25 border-2 border-amber-300 text-yellow-200 text-xs font-black shadow">
-              <ShieldCheck className="w-4 h-4 text-yellow-300" />
-              <span>ADMIN</span>
-            </span>
+            <button
+              type="button"
+              onClick={() => {
+                soundFx.playClick();
+                onOpenAdminDashboard();
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-gradient-to-r from-amber-300 to-yellow-400 hover:from-amber-200 hover:to-yellow-300 text-purple-950 text-xs sm:text-sm font-black shadow-lg border-2 border-white/70 transition transform hover:scale-105 cursor-pointer"
+            >
+              <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
+              <span>Quản trị TK</span>
+            </button>
           )}
 
           <button
+            type="button"
             onClick={() => {
               soundFx.playClick();
               onOpenGitHubConfig();
             }}
-            className="flex items-center space-x-2 bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 text-teal-950 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition shadow-lg transform hover:scale-105 border-2 border-white/60 cursor-pointer"
+            className="flex items-center space-x-2 bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 text-teal-950 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition shadow-lg transform hover:scale-105 border-2 border-white/60 cursor-pointer"
           >
             <CloudDownload className="w-4 h-4 stroke-[2.5]" />
             <span>Tải đề</span>
           </button>
 
           <button
+            type="button"
             onClick={() => {
               soundFx.playClick();
               onOpenHistory();
             }}
-            className="flex items-center space-x-2 bg-gradient-to-r from-yellow-400 to-amber-400 hover:from-yellow-300 hover:to-amber-300 text-purple-950 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition shadow-lg transform hover:scale-105 border-2 border-white/40 cursor-pointer"
+            className="flex items-center space-x-2 bg-gradient-to-r from-yellow-400 to-amber-400 hover:from-yellow-300 hover:to-amber-300 text-purple-950 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition shadow-lg transform hover:scale-105 border-2 border-white/40 cursor-pointer"
           >
             <History className="w-4 h-4" />
             <span>Lịch Sử Thi</span>
           </button>
+
+          {user ? (
+            <button
+              type="button"
+              onClick={() => {
+                soundFx.playClick();
+                onSignOut();
+              }}
+              title={`Đang đăng nhập: ${user.email || user.displayName || ''}`}
+              className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 text-white px-3 py-2.5 rounded-2xl text-xs font-bold border border-white/30 transition cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden md:inline max-w-[110px] truncate">
+                {user.displayName || user.email?.split('@')[0]}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                soundFx.playClick();
+                onSignIn();
+              }}
+              className="flex items-center gap-1.5 bg-white text-purple-900 hover:bg-purple-50 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-black shadow-lg transition transform hover:scale-105 cursor-pointer"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Đăng nhập</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

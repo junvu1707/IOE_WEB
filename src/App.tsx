@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { Header } from './components/Header';
 import { ExamSetup } from './components/ExamSetup';
 import { ExamScreen } from './components/ExamScreen';
 import { ExamResult } from './components/ExamResult';
 import { HistoryModal } from './components/HistoryModal';
 import { GitHubConfigModal } from './components/GitHubConfigModal';
+import { AdminDashboardModal } from './components/AdminDashboardModal';
 import {
   ExamConfig,
   ExamResultData,
@@ -20,25 +22,36 @@ import {
   generateExamQuestions,
   getExamKey,
 } from './data/questionBank';
+import { auth, signInWithGoogle, signOutUser } from './firebase';
 import {
-  getAccountAccessState,
-  activateAccountWithPassword,
-  isAccountAuthorizedForGrade,
-  isAuthenticatedAdmin,
-} from './data/accounts';
+  LicenseRecord,
+  activateOrTakeoverLicense,
+  checkIsAdminUser,
+  clearStoredLocalSession,
+  getStoredLocalSession,
+  subscribeToActiveLicense,
+} from './services/licenseService';
+import { soundFx } from './utils/sound';
 
 export default function App() {
   const [view, setView] = useState<'setup' | 'exam' | 'result'>('setup');
+
+  // Firebase Auth & Real-time License Session state
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState<boolean>(false);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+
   const [accountId, setAccountId] = useState<string>(() => localStorage.getItem('oly_account_id') || '');
   const [accountPassword, setAccountPassword] = useState<string>('');
-  const isAdmin = isAuthenticatedAdmin(accountId, accountPassword);
-  const [selectedGrade, setSelectedGrade] = useState<GradeLevel>(() => {
-    const saved = localStorage.getItem('oly_account_id') || '';
-    const access = getAccountAccessState(saved, '');
-    return access.isActivated && access.grade ? access.grade : 4;
-  });
-  const [selectedRound, setSelectedRound] = useState<ContestRound>(1);
+  const [activeLicense, setActiveLicense] = useState<LicenseRecord | null>(null);
+  const [activeSession, setActiveSession] = useState<{ accountId: string; sessionId: string } | null>(null);
+  const [isActivating, setIsActivating] = useState<boolean>(false);
+  const [activationError, setActivationError] = useState<string | null>(null);
+  const [kickedMessage, setKickedMessage] = useState<string | null>(null);
 
+  // Exam selection & GitHub pool state
+  const [selectedGrade, setSelectedGrade] = useState<GradeLevel>(4);
+  const [selectedRound, setSelectedRound] = useState<ContestRound>(1);
   const [repoIndex, setRepoIndex] = useState<GitHubRepoIndex | null>(null);
   const [loadedPool, setLoadedPool] = useState<LoadedExamPool | null>(null);
   const [isLoadingPool, setIsLoadingPool] = useState<boolean>(true);
@@ -50,8 +63,20 @@ export default function App() {
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showGitHubModal, setShowGitHubModal] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
 
   const loadRequestIdRef = useRef(0);
+
+  const isGradeAuthorizedNow = useCallback(
+    (grade: GradeLevel, adminFlag = isAdmin, licenseObj = activeLicense): boolean => {
+      if (adminFlag) return true;
+      if (!licenseObj || licenseObj.status !== 'active') return false;
+      if (licenseObj.expiresAt && licenseObj.expiresAt.toMillis() <= Date.now()) return false;
+      if (licenseObj.isAdminAccount) return true;
+      return licenseObj.grade === grade;
+    },
+    [isAdmin, activeLicense]
+  );
 
   const loadPool = useCallback(
     async (
@@ -59,12 +84,10 @@ export default function App() {
       round: ContestRound,
       indexOverride?: GitHubRepoIndex | null,
       forceRefresh = false,
-      accountOverride?: string,
-      passwordOverride?: string
+      allowGitHubOverride?: boolean
     ) => {
-      const activeAccount = accountOverride !== undefined ? accountOverride : accountId;
-      const activePassword = passwordOverride !== undefined ? passwordOverride : accountPassword;
-      const allowGitHub = isAccountAuthorizedForGrade(activeAccount, grade, activePassword);
+      const allowGitHub =
+        allowGitHubOverride !== undefined ? allowGitHubOverride : isGradeAuthorizedNow(grade);
       const requestId = ++loadRequestIdRef.current;
       setIsLoadingPool(true);
       try {
@@ -83,10 +106,71 @@ export default function App() {
         }
       }
     },
-    [repoIndex, accountId, accountPassword]
+    [repoIndex, isGradeAuthorizedNow]
   );
 
-  // Startup: Load history and automatically sync GitHub repo index + initial exam (GitHub enabled only if account has active 1-year activation)
+  // 1. Firebase Auth listener + Admin check + Restore previously activated session on this device
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      setAuthReady(true);
+
+      if (!firebaseUser) {
+        setIsAdmin(false);
+        setActiveLicense(null);
+        setActiveSession(null);
+        return;
+      }
+
+      try {
+        const adminStatus = await checkIsAdminUser(firebaseUser);
+        setIsAdmin(adminStatus);
+      } catch (err) {
+        console.error(err);
+        setIsAdmin(false);
+      }
+
+      // Restore active single-device session if this browser already activated a license for this UID
+      const stored = getStoredLocalSession();
+      if (stored && stored.uid === firebaseUser.uid) {
+        setAccountId(stored.accountId);
+        setActiveSession({ accountId: stored.accountId, sessionId: stored.sessionId });
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Real-time Firestore listener on the active license (Anti-Sharing Single Session Kick)
+  useEffect(() => {
+    if (!authReady || !user || !activeSession) {
+      return;
+    }
+
+    const unsub = subscribeToActiveLicense({
+      accountId: activeSession.accountId,
+      localSessionId: activeSession.sessionId,
+      onActive: (license) => {
+        setActiveLicense(license);
+        setActivationError(null);
+      },
+      onKicked: (reason) => {
+        soundFx.playError();
+        setActiveLicense(null);
+        setActiveSession(null);
+        setKickedMessage(reason);
+        // Immediately pull user out of an active exam if kicked by another device or Admin!
+        setView((prev) => (prev === 'exam' ? 'setup' : prev));
+      },
+      onError: (err) => {
+        console.error('License snapshot error:', err);
+      },
+    });
+
+    return () => unsub();
+  }, [authReady, user, activeSession]);
+
+  // 3. Startup: Load local exam history and GitHub repo index
   useEffect(() => {
     const savedHistory = localStorage.getItem('oly_history');
     if (savedHistory) {
@@ -98,114 +182,170 @@ export default function App() {
     }
 
     let cancelled = false;
-
-    const initGitHub = async () => {
-      setIsLoadingPool(true);
+    const initRepo = async () => {
       const index = await fetchGitHubRepoIndex(undefined, true);
       if (cancelled) return;
       setRepoIndex(index);
-
-      const savedAccount = localStorage.getItem('oly_account_id') || '';
-      const access = getAccountAccessState(savedAccount, '');
-      const initialGrade: GradeLevel = access.isActivated && access.grade ? access.grade : 4;
-      let initialRound: ContestRound = 1;
-
-      if (access.isActivated && index && !index.apiLimited) {
-        const hasC1 = Boolean(index.availableMap[getExamKey(initialGrade, 1)]);
-        if (!hasC1) {
-          const firstForGrade = index.files.find((f) => f.grade === initialGrade);
-          if (firstForGrade) {
-            initialRound = firstForGrade.round;
-          }
-        }
-      }
-
-      setSelectedGrade(initialGrade);
-      setSelectedRound(initialRound);
-      await loadPool(initialGrade, initialRound, index, false, savedAccount, '');
     };
-
-    initGitHub();
+    initRepo();
 
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const syncAccountCredentials = (nextAccountId: string, nextPassword: string) => {
-    activateAccountWithPassword(nextAccountId, nextPassword);
-    const access = getAccountAccessState(nextAccountId, nextPassword);
+  // 4. Auto-sync question pool whenever grade, round, repoIndex, admin status, or activeLicense changes
+  useEffect(() => {
+    const authorized = isGradeAuthorizedNow(selectedGrade, isAdmin, activeLicense);
+    let targetRound = selectedRound;
 
-    if (access.isActivated && (access.isAdmin || access.grade)) {
-      const targetGrade = access.isAdmin ? selectedGrade : access.grade!;
-      let targetRound = selectedRound;
-
-      if (repoIndex && !repoIndex.apiLimited) {
-        const hasCurrentRound = Boolean(repoIndex.availableMap[getExamKey(targetGrade, targetRound)]);
-        if (!hasCurrentRound) {
-          const firstForGrade = repoIndex.files.find((f) => f.grade === targetGrade);
-          if (firstForGrade) {
-            targetRound = firstForGrade.round;
-          }
+    if (authorized && repoIndex && !repoIndex.apiLimited) {
+      const hasCurrentRound = Boolean(repoIndex.availableMap[getExamKey(selectedGrade, targetRound)]);
+      if (!hasCurrentRound) {
+        const firstForGrade = repoIndex.files.find((f) => f.grade === selectedGrade);
+        if (firstForGrade && firstForGrade.round !== selectedRound) {
+          setSelectedRound(firstForGrade.round);
+          return;
         }
       }
-
-      setSelectedGrade(targetGrade);
-      setSelectedRound(targetRound);
-      loadPool(targetGrade, targetRound, repoIndex, false, nextAccountId, nextPassword);
-    } else {
-      loadPool(selectedGrade, selectedRound, repoIndex, false, nextAccountId, nextPassword);
     }
+
+    loadPool(selectedGrade, targetRound, repoIndex, false, authorized);
+  }, [selectedGrade, selectedRound, repoIndex, isAdmin, activeLicense, isGradeAuthorizedNow, loadPool]);
+
+  // Auto-select the license's grade as soon as a student license becomes active
+  useEffect(() => {
+    if (activeLicense && !activeLicense.isAdminAccount && activeLicense.grade >= 1 && activeLicense.grade <= 9) {
+      setSelectedGrade(activeLicense.grade as GradeLevel);
+    }
+  }, [activeLicense?.accountId, activeLicense?.grade, activeLicense?.isAdminAccount]);
+
+  const handleSignIn = async () => {
+    setActivationError(null);
+    setKickedMessage(null);
+    try {
+      const cred = await signInWithGoogle();
+      const signedInUser = cred.user;
+      const adminStatus = await checkIsAdminUser(signedInUser);
+      setIsAdmin(adminStatus);
+
+      // If user already typed Account ID & Password before clicking Sign In, activate immediately in one flow
+      if (accountId.trim() && accountPassword.trim()) {
+        setIsActivating(true);
+        try {
+          const result = await activateOrTakeoverLicense({
+            user: signedInUser,
+            accountId,
+            password: accountPassword,
+            studentName: localStorage.getItem('oly_student_name') || signedInUser.displayName || 'Học sinh',
+            isUserAdmin: adminStatus,
+          });
+          if (result.ok && result.sessionId && result.license) {
+            soundFx.playSuccess();
+            setActiveSession({ accountId: result.license.accountId, sessionId: result.sessionId });
+            setActiveLicense(result.license);
+            setAccountId(result.license.accountId);
+            localStorage.setItem('oly_account_id', result.license.accountId);
+            setAccountPassword('');
+          } else if (result.error) {
+            setActivationError(result.error);
+          }
+        } finally {
+          setIsActivating(false);
+        }
+      }
+    } catch (err: any) {
+      if (err?.code !== 'auth/popup-closed-by-user') {
+        setActivationError('Không thể đăng nhập Google: ' + (err?.message || 'Vui lòng thử lại.'));
+      }
+    }
+  };
+
+  const handleSignOut = async () => {
+    clearStoredLocalSession();
+    setActiveLicense(null);
+    setActiveSession(null);
+    setAccountPassword('');
+    setIsAdmin(false);
+    setShowAdminModal(false);
+    setView('setup');
+    await signOutUser();
   };
 
   const handleAccountIdChange = (newAccountId: string) => {
     setAccountId(newAccountId);
+    setActivationError(null);
     if (newAccountId.trim()) {
       localStorage.setItem('oly_account_id', newAccountId.trim());
     } else {
       localStorage.removeItem('oly_account_id');
+      clearStoredLocalSession();
+      setActiveLicense(null);
+      setActiveSession(null);
     }
-    syncAccountCredentials(newAccountId, accountPassword);
   };
 
   const handleAccountPasswordChange = (newPassword: string) => {
     setAccountPassword(newPassword);
-    syncAccountCredentials(accountId, newPassword);
+    setActivationError(null);
+  };
+
+  const handleActivateLicense = async (studentName: string) => {
+    if (!user) {
+      await handleSignIn();
+      return;
+    }
+
+    setIsActivating(true);
+    setActivationError(null);
+    setKickedMessage(null);
+
+    try {
+      const result = await activateOrTakeoverLicense({
+        user,
+        accountId,
+        password: accountPassword,
+        studentName,
+        isUserAdmin: isAdmin,
+      });
+
+      if (!result.ok || !result.sessionId || !result.license) {
+        soundFx.playError();
+        setActivationError(result.error || 'Không thể kích hoạt tài khoản.');
+        return;
+      }
+
+      soundFx.playSuccess();
+      setActiveSession({ accountId: result.license.accountId, sessionId: result.sessionId });
+      setActiveLicense(result.license);
+      setAccountId(result.license.accountId);
+      localStorage.setItem('oly_account_id', result.license.accountId);
+      setAccountPassword(''); // Clear password input after successful 1-year activation
+    } catch (err: any) {
+      soundFx.playError();
+      setActivationError(err?.message || 'Lỗi kích hoạt tài khoản trên máy chủ.');
+    } finally {
+      setIsActivating(false);
+    }
   };
 
   const handleSelectGrade = (newGrade: GradeLevel) => {
-    let nextRound = selectedRound;
-
-    // If authorized for newGrade and current round isn't on GitHub, auto-select the first available GitHub round
-    if (isAccountAuthorizedForGrade(accountId, newGrade, accountPassword) && repoIndex && !repoIndex.apiLimited) {
-      const hasCurrentRound = Boolean(repoIndex.availableMap[getExamKey(newGrade, selectedRound)]);
-      if (!hasCurrentRound) {
-        const firstForGrade = repoIndex.files.find((f) => f.grade === newGrade);
-        if (firstForGrade) {
-          nextRound = firstForGrade.round;
-        }
-      }
-    }
-
     setSelectedGrade(newGrade);
-    setSelectedRound(nextRound);
-    loadPool(newGrade, nextRound, repoIndex, false, accountId, accountPassword);
   };
 
   const handleSelectRound = (newRound: ContestRound) => {
     setSelectedRound(newRound);
-    loadPool(selectedGrade, newRound, repoIndex, false, accountId, accountPassword);
   };
 
   const handleRefreshGitHub = async () => {
     setIsLoadingPool(true);
     const freshIndex = await fetchGitHubRepoIndex(undefined, true);
     setRepoIndex(freshIndex);
-    await loadPool(selectedGrade, selectedRound, freshIndex, true, accountId, accountPassword);
+    await loadPool(selectedGrade, selectedRound, freshIndex, true);
   };
 
   const handleStartExam = async (config: ExamConfig) => {
-    const allowGitHub = isAccountAuthorizedForGrade(accountId, config.grade, accountPassword);
+    const allowGitHub = isGradeAuthorizedNow(config.grade);
     let pool = loadedPool;
     if (
       !pool ||
@@ -214,7 +354,7 @@ export default function App() {
       (!allowGitHub && (pool.source === 'github' || pool.source === 'merged')) ||
       (allowGitHub && pool.source === 'test')
     ) {
-      pool = await loadPool(config.grade, config.round, repoIndex, false, accountId, accountPassword);
+      pool = await loadPool(config.grade, config.round, repoIndex, false, allowGitHub);
     }
 
     const generated = generateExamQuestions(
@@ -249,7 +389,11 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 font-sans flex flex-col text-gray-900">
       <Header
+        user={user}
         isAdmin={isAdmin}
+        onSignIn={handleSignIn}
+        onSignOut={handleSignOut}
+        onOpenAdminDashboard={() => setShowAdminModal(true)}
         onOpenHistory={() => setShowHistoryModal(true)}
         onOpenGitHubConfig={() => setShowGitHubModal(true)}
         onHome={() => setView('setup')}
@@ -258,10 +402,17 @@ export default function App() {
       <main className="flex-1 py-6">
         {view === 'setup' && (
           <ExamSetup
+            user={user}
+            authReady={authReady}
+            isAdmin={isAdmin}
+            activeLicense={activeLicense}
             selectedGrade={selectedGrade}
             selectedRound={selectedRound}
             accountId={accountId}
             accountPassword={accountPassword}
+            isActivating={isActivating}
+            activationError={activationError}
+            kickedMessage={kickedMessage}
             repoIndex={repoIndex}
             loadedPool={loadedPool}
             isLoadingPool={isLoadingPool}
@@ -269,8 +420,12 @@ export default function App() {
             onSelectRound={handleSelectRound}
             onChangeAccountId={handleAccountIdChange}
             onChangeAccountPassword={handleAccountPasswordChange}
+            onActivateLicense={handleActivateLicense}
+            onSignIn={handleSignIn}
+            onDismissKicked={() => setKickedMessage(null)}
             onRefreshGitHub={handleRefreshGitHub}
             onOpenGitHubConfig={() => setShowGitHubModal(true)}
+            onOpenAdminDashboard={() => setShowAdminModal(true)}
             onStartExam={handleStartExam}
           />
         )}
@@ -312,9 +467,13 @@ export default function App() {
           onQuestionsLoaded={(newIndex) => {
             const nextIndex = newIndex !== undefined ? newIndex : repoIndex;
             setRepoIndex(nextIndex);
-            loadPool(selectedGrade, selectedRound, nextIndex, true, accountId, accountPassword);
+            loadPool(selectedGrade, selectedRound, nextIndex, true);
           }}
         />
+      )}
+
+      {showAdminModal && isAdmin && (
+        <AdminDashboardModal onClose={() => setShowAdminModal(false)} />
       )}
     </div>
   );

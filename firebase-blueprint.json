@@ -1,0 +1,123 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted administrator account record granted full control over license accounts and system management.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the administrator.",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin access was granted."
+        }
+      },
+      "required": ["uid", "displayName", "createdAt"]
+    },
+    "LicenseAccount": {
+      "title": "LicenseAccount",
+      "description": "Activated student or admin license account (99,999 IDs per grade, 1-year validity, real-time single active session anti-sharing).",
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "description": "Normalized account ID (e.g., l1_00001..l9_99999, l1_001..l9_999, or uyenlp1310).",
+          "maxLength": 32,
+          "pattern": "^(uyenlp1310|l[1-9]_[0-9]{3,5})$"
+        },
+        "grade": {
+          "type": "integer",
+          "description": "Authorized grade level (1..9 for student licenses, 0 for all-grade admin license)."
+        },
+        "isAdminAccount": {
+          "type": "boolean",
+          "description": "Whether this license carries admin privileges. Cannot be set to true by non-admins."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID currently holding the active session on this license.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerName": {
+          "type": "string",
+          "description": "Student display name entered on the active device.",
+          "maxLength": 100
+        },
+        "activeSessionId": {
+          "type": "string",
+          "description": "Unique active session token; changing this kicks previous devices out in real-time.",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deviceLabel": {
+          "type": "string",
+          "description": "Browser and OS label of the currently active device.",
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "revoked"],
+          "description": "License status. Revoked licenses are locked and cannot be reactivated or taken over by students."
+        },
+        "activatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp when the license was first activated."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Expiration timestamp (1 year from activation). Immutable by non-admins."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest session takeover or admin update."
+        },
+        "loginCount": {
+          "type": "integer",
+          "description": "Monotonic counter tracking total activations and device takeovers."
+        }
+      },
+      "required": [
+        "accountId",
+        "grade",
+        "isAdminAccount",
+        "ownerUid",
+        "ownerName",
+        "activeSessionId",
+        "deviceLabel",
+        "status",
+        "activatedAt",
+        "expiresAt",
+        "updatedAt",
+        "loginCount"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{uid}": {
+      "schema": {
+        "$ref": "#/entities/AdminUser"
+      },
+      "description": "Registry of trusted admin UIDs (bootstrapped admin email junvu1707@gmail.com can manage)."
+    },
+    "/licenses/{accountId}": {
+      "schema": {
+        "$ref": "#/entities/LicenseAccount"
+      },
+      "description": "Real-time license activation, 1-year expiration, and single-active-session tracking per account ID."
+    }
+  }
+}

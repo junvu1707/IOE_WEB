@@ -8,105 +8,47 @@ export interface AccountValidationResult {
   idNumber: string | null;
 }
 
-export interface ActivatedAccountRecord {
-  accountId: string;
-  isAdmin: boolean;
-  grade: GradeLevel | null;
-  activatedAt: number;
-  expiresAt: number;
-}
-
-export interface AccountAccessState {
-  validId: boolean;
-  isAdmin: boolean;
-  normalized: string;
-  grade: GradeLevel | null;
-  idNumber: string | null;
-  isActivated: boolean;
-  isExpired: boolean;
-  wrongPassword: boolean;
-  expiresAt: number | null;
-  expiresAtLabel: string | null;
-}
-
-const GRADES: GradeLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-export const MAX_ACCOUNTS_PER_GRADE = 999;
+/** Số lượng tài khoản hợp lệ tối đa cho mỗi khối lớp: 99.999 ID (l{khối}_00001 -> l{khối}_99999) */
+export const MAX_ACCOUNTS_PER_GRADE = 99999;
 
 /** Thời hạn sử dụng sau khi kích hoạt đúng ID & mật khẩu: 1 năm (365 ngày) */
 export const ACTIVATION_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
-const ACTIVATION_STORAGE_KEY = 'oly_account_activations';
 
-/**
- * Danh sách tài khoản Admin có toàn quyền truy cập kho đề tất cả khối Lớp 1-9 và mọi tính năng.
- */
+/** Email Admin mặc định (Bootstrapped Admin trên Firestore Rules) */
+export const BOOTSTRAPPED_ADMIN_EMAIL = 'junvu1707@gmail.com';
+
+/** Danh sách mã tài khoản Admin có toàn quyền truy cập kho đề tất cả khối Lớp 1-9 và mọi tính năng */
 export const ADMIN_ACCOUNTS: readonly string[] = ['uyenlp1310'];
 
-/**
- * Mật khẩu kích hoạt tài khoản dùng trong 1 năm.
- */
+/** Mật khẩu kích hoạt tài khoản dùng trong 1 năm */
 const ACCOUNT_ACCESS_PASS = 'kdepass';
 
 /**
- * Danh sách tài khoản hợp lệ cho từng khối lớp (Lớp 1 -> Lớp 9, mỗi lớp 999 ID).
- * Định dạng: l{lớp}_{001..999}
+ * Pattern hợp lệ khớp verbatim với firebase-blueprint.json & firestore.rules:
+ * - Học sinh: l{1..9}_{3 đến 5 chữ số}, giá trị số từ 1 đến 99999 (hỗ trợ cả l1_001 và l1_00001..l1_99999)
+ * - Admin: uyenlp1310
  */
-export const VALID_ACCOUNTS_BY_GRADE: Record<GradeLevel, string[]> = GRADES.reduce(
-  (acc, grade) => {
-    const list: string[] = [];
-    for (let i = 1; i <= MAX_ACCOUNTS_PER_GRADE; i++) {
-      list.push(`l${grade}_${String(i).padStart(3, '0')}`);
-    }
-    acc[grade] = list;
-    return acc;
-  },
-  {} as Record<GradeLevel, string[]>
-);
+const STUDENT_ID_REGEX = /^l([1-9])_([0-9]{3,5})$/;
 
-/**
- * Bảng tra cứu nhanh O(1) toàn bộ 8.991 tài khoản học sinh (9 khối × 999 ID) -> khối lớp tương ứng.
- */
-export const VALID_ACCOUNT_MAP: ReadonlyMap<string, GradeLevel> = (() => {
-  const map = new Map<string, GradeLevel>();
-  for (const grade of GRADES) {
-    for (const accountId of VALID_ACCOUNTS_BY_GRADE[grade]) {
-      map.set(accountId, grade);
-    }
-  }
-  return map;
-})();
-
-function readActivationStore(): Record<string, ActivatedAccountRecord> {
-  try {
-    const raw = localStorage.getItem(ACTIVATION_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+export function formatStudentAccountId(grade: GradeLevel, seq: number): string {
+  const clamped = Math.max(1, Math.min(MAX_ACCOUNTS_PER_GRADE, Math.floor(seq)));
+  return `l${grade}_${String(clamped).padStart(5, '0')}`;
 }
 
-function writeActivationStore(store: Record<string, ActivatedAccountRecord>): void {
-  try {
-    localStorage.setItem(ACTIVATION_STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // Ignore storage quota errors
-  }
-}
-
-/**
- * Kiểm tra mật khẩu nhập vào có khớp không.
- */
 export function isValidAccountPassword(rawPassword: string): boolean {
   return rawPassword.trim() === ACCOUNT_ACCESS_PASS;
 }
 
+export function isBootstrappedAdminEmail(email?: string | null, emailVerified?: boolean): boolean {
+  return Boolean(emailVerified && email && email.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL);
+}
+
 /**
- * Kiểm tra tài khoản nhập vào có nằm trong danh sách hợp lệ (Admin hoặc học sinh theo khối) không.
+ * Kiểm tra tài khoản nhập vào có nằm trong danh sách hợp lệ không (899.991 ID học sinh = 9 lớp × 99.999 ID + Admin uyenlp1310).
  */
 export function validateAccountId(rawInput: string): AccountValidationResult {
   const normalized = rawInput.trim().toLowerCase();
-  if (!normalized) {
+  if (!normalized || normalized.length > 32) {
     return { valid: false, isAdmin: false, normalized: '', grade: null, idNumber: null };
   }
 
@@ -114,144 +56,58 @@ export function validateAccountId(rawInput: string): AccountValidationResult {
     return { valid: true, isAdmin: true, normalized, grade: null, idNumber: 'ADMIN' };
   }
 
-  const grade = VALID_ACCOUNT_MAP.get(normalized) ?? null;
-  if (!grade) {
+  const match = normalized.match(STUDENT_ID_REGEX);
+  if (!match) {
     return { valid: false, isAdmin: false, normalized, grade: null, idNumber: null };
   }
 
-  const idNumber = normalized.split('_')[1] || null;
-  return { valid: true, isAdmin: false, normalized, grade, idNumber };
-}
+  const grade = Number(match[1]) as GradeLevel;
+  const numPart = match[2];
+  const seq = parseInt(numPart, 10);
 
-/**
- * Lấy thông tin kích hoạt còn hiệu lực (trong vòng 1 năm) của tài khoản nếu có.
- */
-export function getActiveActivation(rawAccountId: string): ActivatedAccountRecord | null {
-  const normalized = rawAccountId.trim().toLowerCase();
-  if (!normalized) return null;
-
-  const store = readActivationStore();
-  const record = store[normalized];
-  if (!record || typeof record.expiresAt !== 'number') return null;
-
-  if (Date.now() < record.expiresAt) {
-    return record;
-  }
-  return null;
-}
-
-/**
- * Kiểm tra tài khoản từng kích hoạt nhưng hiện đã hết hạn 1 năm.
- */
-export function hasExpiredActivation(rawAccountId: string): boolean {
-  const normalized = rawAccountId.trim().toLowerCase();
-  if (!normalized) return false;
-
-  const store = readActivationStore();
-  const record = store[normalized];
-  return Boolean(record && typeof record.expiresAt === 'number' && Date.now() >= record.expiresAt);
-}
-
-/**
- * Kích hoạt tài khoản trong 1 năm (365 ngày) khi nhập đúng ID hợp lệ và mật khẩu.
- */
-export function activateAccountWithPassword(
-  rawAccountId: string,
-  rawPassword: string
-): ActivatedAccountRecord | null {
-  const check = validateAccountId(rawAccountId);
-  if (!check.valid || !isValidAccountPassword(rawPassword)) {
-    return null;
+  if (Number.isNaN(seq) || seq < 1 || seq > MAX_ACCOUNTS_PER_GRADE) {
+    return { valid: false, isAdmin: false, normalized, grade: null, idNumber: null };
   }
 
-  const existing = getActiveActivation(check.normalized);
-  if (existing) {
-    return existing;
-  }
-
-  const now = Date.now();
-  const record: ActivatedAccountRecord = {
-    accountId: check.normalized,
-    isAdmin: check.isAdmin,
-    grade: check.grade,
-    activatedAt: now,
-    expiresAt: now + ACTIVATION_DURATION_MS,
-  };
-
-  const store = readActivationStore();
-  store[check.normalized] = record;
-  writeActivationStore(store);
-  return record;
+  return { valid: true, isAdmin: false, normalized, grade, idNumber: numPart };
 }
 
 /**
- * Đánh giá trạng thái truy cập hiện tại của tài khoản (đã kích hoạt 1 năm hay chưa, hết hạn, sai pass...).
+ * Tạo mã phiên duy nhất cho mỗi trình duyệt/thiết bị (<= 64 ký tự, khớp regex ^[a-zA-Z0-9_\-]+$).
  */
-export function getAccountAccessState(rawAccountId: string, rawPassword = ''): AccountAccessState {
-  const check = validateAccountId(rawAccountId);
-  if (!check.valid) {
-    return {
-      validId: false,
-      isAdmin: false,
-      normalized: check.normalized,
-      grade: null,
-      idNumber: null,
-      isActivated: false,
-      isExpired: false,
-      wrongPassword: false,
-      expiresAt: null,
-      expiresAtLabel: null,
-    };
-  }
-
-  let activeRecord = getActiveActivation(check.normalized);
-  if (!activeRecord && isValidAccountPassword(rawPassword)) {
-    activeRecord = activateAccountWithPassword(check.normalized, rawPassword);
-  }
-
-  const isActivated = Boolean(activeRecord);
-  const expiresAt = activeRecord ? activeRecord.expiresAt : null;
-  const expiresAtLabel = expiresAt
-    ? new Date(expiresAt).toLocaleDateString('vi-VN', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      })
-    : null;
-
-  const isExpired = !isActivated && hasExpiredActivation(check.normalized);
-  const wrongPassword = !isActivated && rawPassword.trim().length > 0 && !isValidAccountPassword(rawPassword);
-
-  return {
-    validId: true,
-    isAdmin: check.isAdmin && isActivated,
-    normalized: check.normalized,
-    grade: check.grade,
-    idNumber: check.idNumber,
-    isActivated,
-    isExpired,
-    wrongPassword,
-    expiresAt,
-    expiresAtLabel,
-  };
+export function generateSessionId(): string {
+  const rand = Math.random().toString(36).slice(2, 12);
+  const ts = Date.now().toString(36);
+  return `sess_${ts}_${rand}`.slice(0, 64);
 }
 
 /**
- * Kiểm tra tài khoản đã xác thực Admin (đúng ID uyenlp1310 và đã nhập đúng pass còn hạn 1 năm).
+ * Lấy nhãn mô tả ngắn gọn của thiết bị/trình duyệt hiện tại (<= 120 ký tự theo firebase-blueprint.json).
  */
-export function isAuthenticatedAdmin(rawAccountId: string, rawPassword = ''): boolean {
-  return getAccountAccessState(rawAccountId, rawPassword).isAdmin;
+export function getDeviceLabel(): string {
+  if (typeof navigator === 'undefined') return 'Web Browser';
+  const ua = navigator.userAgent || '';
+
+  let browser = 'Trình duyệt';
+  if (/Edg\//.test(ua)) browser = 'Edge';
+  else if (/Chrome\//.test(ua) && !/Edg\//.test(ua)) browser = 'Chrome';
+  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) browser = 'Safari';
+  else if (/Firefox\//.test(ua)) browser = 'Firefox';
+
+  let os = 'Máy tính';
+  if (/iPhone|iPad|iPod/.test(ua)) os = 'iOS';
+  else if (/Android/.test(ua)) os = 'Android';
+  else if (/Windows/.test(ua)) os = 'Windows';
+  else if (/Mac OS X/.test(ua)) os = 'macOS';
+  else if (/Linux/.test(ua)) os = 'Linux';
+
+  return `${browser} • ${os}`.slice(0, 120);
 }
 
 /**
- * Kiểm tra tài khoản có quyền tải bộ đề GitHub cho khối lớp chỉ định hay không.
- * Yêu cầu đúng ID + mật khẩu (còn hiệu lực 1 năm). Admin có toàn quyền tất cả khối 1 -> 9.
+ * Chuẩn hóa tên học sinh theo ràng buộc maxLength: 100 của firebase-blueprint.json.
  */
-export function isAccountAuthorizedForGrade(
-  rawAccountId: string,
-  grade: GradeLevel,
-  rawPassword = ''
-): boolean {
-  const access = getAccountAccessState(rawAccountId, rawPassword);
-  return access.isActivated && (access.isAdmin || access.grade === grade);
+export function sanitizeOwnerName(rawName: string): string {
+  const trimmed = rawName.trim();
+  return (trimmed || 'Học sinh').slice(0, 100);
 }

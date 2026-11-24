@@ -1,0 +1,183 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isStudentLicenseId(id) {
+      return id is string &&
+        id.size() >= 6 &&
+        id.size() <= 32 &&
+        id.matches('^l[1-9]_[0-9]{3,5}$') &&
+        !id.matches('^l[1-9]_0+$');
+    }
+
+    function isValidLicenseId(id) {
+      return id == 'uyenlp1310' || isStudentLicenseId(id);
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedEmail() && request.auth.token.email == 'junvu1707@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedEmail() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // --- Validation Blueprints (Anti-Update-Gap) ---
+    function isValidAdminUser(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'createdAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == uid &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidLicense(data, accountId) {
+      return data.keys().hasAll([
+          'accountId',
+          'grade',
+          'isAdminAccount',
+          'ownerUid',
+          'ownerName',
+          'activeSessionId',
+          'deviceLabel',
+          'status',
+          'activatedAt',
+          'expiresAt',
+          'updatedAt',
+          'loginCount'
+        ]) &&
+        data.keys().hasOnly([
+          'accountId',
+          'grade',
+          'isAdminAccount',
+          'ownerUid',
+          'ownerName',
+          'activeSessionId',
+          'deviceLabel',
+          'status',
+          'activatedAt',
+          'expiresAt',
+          'updatedAt',
+          'loginCount'
+        ]) &&
+        data.accountId is string && data.accountId.size() >= 6 && data.accountId.size() <= 32 && data.accountId == accountId &&
+        data.grade is int && data.grade >= 0 && data.grade <= 9 &&
+        data.isAdminAccount is bool &&
+        data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 && data.ownerUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerName is string && data.ownerName.size() <= 100 &&
+        data.activeSessionId is string && data.activeSessionId.size() >= 1 && data.activeSessionId.size() <= 64 && data.activeSessionId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.deviceLabel is string && data.deviceLabel.size() <= 120 &&
+        data.status is string && data.status.size() <= 16 && (data.status == 'active' || data.status == 'revoked') &&
+        data.activatedAt is timestamp &&
+        data.expiresAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.loginCount is int && data.loginCount >= 1 && data.loginCount <= 1000000;
+    }
+
+    function isValidStudentLicenseCreate(data, accountId) {
+      return isStudentLicenseId(accountId) &&
+        data.isAdminAccount == false &&
+        data.status == 'active' &&
+        data.grade >= 1 && data.grade <= 9 &&
+        accountId.matches('^l' + string(data.grade) + '_[0-9]{3,5}$') &&
+        data.ownerUid == request.auth.uid &&
+        data.loginCount == 1 &&
+        data.activatedAt == request.time &&
+        data.updatedAt == request.time &&
+        data.expiresAt > request.time &&
+        data.expiresAt <= request.time + duration.value(366, 'd');
+    }
+
+    function isStudentSessionTakeover(data) {
+      return existing().status == 'active' &&
+        existing().isAdminAccount == false &&
+        existing().expiresAt > request.time &&
+        data.diff(existing()).affectedKeys().hasOnly([
+          'ownerUid',
+          'ownerName',
+          'activeSessionId',
+          'deviceLabel',
+          'loginCount',
+          'updatedAt'
+        ]) &&
+        data.ownerUid == request.auth.uid &&
+        data.loginCount == existing().loginCount + 1 &&
+        data.updatedAt == request.time;
+    }
+
+    // --- Collection: /admins/{uid} ---
+    match /admins/{uid} {
+      allow get: if isVerifiedEmail() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerifiedEmail() && isValidId(uid) && isValidAdminUser(incoming(), uid) &&
+        incoming().createdAt == request.time && isAdmin();
+      allow update: if isVerifiedEmail() && isValidId(uid) && isValidAdminUser(incoming(), uid) &&
+        incoming().createdAt == existing().createdAt && isAdmin();
+      allow delete: if isVerifiedEmail() && isValidId(uid) && isAdmin();
+    }
+
+    // --- Collection: /licenses/{accountId} ---
+    match /licenses/{accountId} {
+      // Single-document lookup for verified users (no PII stored); collection listing strictly Admin-only
+      allow get: if isVerifiedEmail() && isValidLicenseId(accountId) && (
+        resource == null ||
+        existing().ownerUid == request.auth.uid ||
+        existing().status == 'active' ||
+        isAdmin()
+      );
+
+      allow list: if isAdmin();
+
+      allow create: if isVerifiedEmail() &&
+        isValidLicenseId(accountId) &&
+        isValidLicense(incoming(), accountId) && (
+          isValidStudentLicenseCreate(incoming(), accountId) ||
+          (isAdmin() && incoming().activatedAt == request.time && incoming().updatedAt == request.time)
+        );
+
+      allow update: if isVerifiedEmail() &&
+        isValidLicenseId(accountId) &&
+        isValidLicense(incoming(), accountId) && (
+          // Tier 2: Authenticated Student Session Takeover (real-time anti-sharing kick)
+          isStudentSessionTakeover(incoming()) ||
+          // Tier 1: Admin full control (preserve immutable accountId & activatedAt)
+          (
+            isAdmin() &&
+            incoming().accountId == existing().accountId &&
+            incoming().activatedAt == existing().activatedAt &&
+            incoming().updatedAt == request.time
+          )
+        );
+
+      allow delete: if isVerifiedEmail() && isValidLicenseId(accountId) && isAdmin();
+    }
+  }
+}

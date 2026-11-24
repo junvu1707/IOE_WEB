@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { User as FirebaseUser } from 'firebase/auth';
 import { GradeLevel, ContestRound, ExamConfig, GitHubRepoIndex, LoadedExamPool } from '../types';
 import {
   User,
@@ -17,15 +18,25 @@ import {
   FileText,
   Play,
   Rocket,
+  LogIn,
+  Users,
+  ShieldAlert,
 } from 'lucide-react';
 import { soundFx } from '../utils/sound';
-import { getAccountAccessState, isAccountAuthorizedForGrade } from '../data/accounts';
+import { LicenseRecord, formatLicenseDate } from '../services/licenseService';
 
 interface ExamSetupProps {
+  user: FirebaseUser | null;
+  authReady: boolean;
+  isAdmin: boolean;
+  activeLicense: LicenseRecord | null;
   selectedGrade: GradeLevel;
   selectedRound: ContestRound;
   accountId: string;
   accountPassword: string;
+  isActivating: boolean;
+  activationError: string | null;
+  kickedMessage: string | null;
   repoIndex: GitHubRepoIndex | null;
   loadedPool: LoadedExamPool | null;
   isLoadingPool: boolean;
@@ -33,8 +44,12 @@ interface ExamSetupProps {
   onSelectRound: (round: ContestRound) => void;
   onChangeAccountId: (accountId: string) => void;
   onChangeAccountPassword: (password: string) => void;
+  onActivateLicense: (studentName: string) => void;
+  onSignIn: () => void;
+  onDismissKicked: () => void;
   onRefreshGitHub: () => void;
   onOpenGitHubConfig: () => void;
+  onOpenAdminDashboard: () => void;
   onStartExam: (config: ExamConfig) => void;
 }
 
@@ -75,10 +90,17 @@ const ROUND_NAMES: Record<
 };
 
 export const ExamSetup: React.FC<ExamSetupProps> = ({
+  user,
+  authReady,
+  isAdmin,
+  activeLicense,
   selectedGrade,
   selectedRound,
   accountId,
   accountPassword,
+  isActivating,
+  activationError,
+  kickedMessage,
   repoIndex,
   loadedPool,
   isLoadingPool,
@@ -86,8 +108,12 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
   onSelectRound,
   onChangeAccountId,
   onChangeAccountPassword,
+  onActivateLicense,
+  onSignIn,
+  onDismissKicked,
   onRefreshGitHub,
   onOpenGitHubConfig,
+  onOpenAdminDashboard,
   onStartExam,
 }) => {
   const [studentName, setStudentName] = useState(localStorage.getItem('oly_student_name') || '');
@@ -96,7 +122,6 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
   const [nameError, setNameError] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const accountAccess = getAccountAccessState(accountId, accountPassword);
 
   useEffect(() => {
     if (studentName.trim()) {
@@ -108,6 +133,20 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
     if (!repoIndex || repoIndex.apiLimited) return false;
     return repoIndex.files.some((f) => f.grade === g);
   };
+
+  const isGradeAuthorized = (g: GradeLevel): boolean => {
+    if (isAdmin) return true;
+    if (!activeLicense || activeLicense.status !== 'active') return false;
+    if (activeLicense.isAdminAccount) return true;
+    return activeLicense.grade === g;
+  };
+
+  const normalizedInputId = accountId.trim().toLowerCase();
+  const isCurrentInputActivated = Boolean(
+    activeLicense &&
+      activeLicense.status === 'active' &&
+      (!normalizedInputId || activeLicense.accountId === normalizedInputId)
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,7 +160,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
     localStorage.setItem('oly_student_name', studentName.trim());
     onStartExam({
       studentName: studentName.trim(),
-      accountId: accountAccess.isActivated ? accountAccess.normalized : undefined,
+      accountId: activeLicense?.accountId,
       grade: selectedGrade,
       round: selectedRound,
       questionCount,
@@ -151,10 +190,30 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 sm:p-10 space-y-8 relative z-10">
+          {/* Real-time Anti-Sharing Kicked Alert */}
+          {kickedMessage && (
+            <div className="bg-red-50 border-3 border-red-300 rounded-2xl p-4 flex items-start justify-between gap-3 shadow-md animate-in fade-in duration-200">
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="w-6 h-6 text-red-600 shrink-0 mt-0.5" />
+                <div className="text-xs sm:text-sm text-red-900">
+                  <p className="font-black text-red-700">Phiên đăng nhập đã bị ngắt kết nối</p>
+                  <p className="font-semibold mt-0.5">{kickedMessage}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onDismissKicked}
+                className="px-3 py-1 rounded-xl bg-red-100 hover:bg-red-200 text-red-800 font-black text-xs shrink-0 cursor-pointer"
+              >
+                Đã hiểu
+              </button>
+            </div>
+          )}
+
           {/* 1. Student Name, Account ID & Password */}
           <div className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* Col 1: Student Name */}
+              {/* Col 1: Student Name (no example) */}
               <div className="space-y-2">
                 <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
                   <User className="w-5 h-5 text-pink-600" />
@@ -175,7 +234,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 {nameError && <p className="text-xs font-bold text-red-600">{nameError}</p>}
               </div>
 
-              {/* Col 2: Account ID */}
+              {/* Col 2: Account ID (no example) */}
               <div className="space-y-2">
                 <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
                   <KeyRound className="w-5 h-5 text-indigo-600" />
@@ -189,22 +248,16 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                   autoComplete="off"
                   spellCheck={false}
                   className={`w-full px-4 py-3.5 rounded-2xl border-3 focus:ring-4 outline-none transition text-gray-800 font-extrabold text-base sm:text-lg shadow-inner bg-purple-50/50 ${
-                    accountId.trim() === ''
-                      ? 'border-purple-200 focus:border-indigo-600 focus:ring-indigo-100'
-                      : accountAccess.isAdmin
-                      ? 'border-amber-400 focus:border-purple-600 focus:ring-amber-100 bg-amber-50/40'
-                      : accountAccess.isActivated && accountAccess.grade === selectedGrade
+                    isCurrentInputActivated && activeLicense
                       ? 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-100 bg-emerald-50/30'
-                      : accountAccess.isActivated
-                      ? 'border-amber-400 focus:border-amber-500 focus:ring-amber-100 bg-amber-50/30'
-                      : accountAccess.validId
-                      ? 'border-indigo-300 focus:border-indigo-600 focus:ring-indigo-100'
-                      : 'border-red-400 focus:border-red-500 focus:ring-red-100 bg-red-50/30'
+                      : activationError
+                      ? 'border-red-400 focus:border-red-500 focus:ring-red-100 bg-red-50/30'
+                      : 'border-purple-200 focus:border-indigo-600 focus:ring-indigo-100'
                   }`}
                 />
               </div>
 
-              {/* Col 3: Password (left blank) */}
+              {/* Col 3: Password (left completely blank) */}
               <div className="space-y-2">
                 <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
                   <Lock className="w-5 h-5 text-purple-600" />
@@ -219,9 +272,9 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                     autoComplete="new-password"
                     spellCheck={false}
                     className={`w-full pl-4 pr-11 py-3.5 rounded-2xl border-3 focus:ring-4 outline-none transition text-gray-800 font-extrabold text-base sm:text-lg shadow-inner bg-purple-50/50 ${
-                      accountAccess.wrongPassword
+                      activationError
                         ? 'border-red-400 focus:border-red-500 focus:ring-red-100 bg-red-50/30'
-                        : accountAccess.isActivated
+                        : isCurrentInputActivated && activeLicense
                         ? 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-100 bg-emerald-50/30'
                         : 'border-purple-200 focus:border-purple-600 focus:ring-purple-100'
                     }`}
@@ -238,71 +291,111 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
               </div>
             </div>
 
-            {/* Inline Account & 1-Year Activation Status */}
-            {accountId.trim() !== '' && (
-              <div>
-                {!accountAccess.validId ? (
+            {/* Activation Action & Real-Time Session Status Row */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <div className="flex-1 min-w-[220px]">
+                {activationError ? (
                   <p className="text-xs font-bold text-red-600 flex items-center gap-1.5">
                     <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>Tài khoản không hợp lệ.</span>
+                    <span>{activationError}</span>
                   </p>
-                ) : !accountAccess.isActivated ? (
-                  <p
-                    className={`text-xs font-bold flex items-center gap-1.5 ${
-                      accountAccess.wrongPassword ? 'text-red-600' : 'text-amber-700'
-                    }`}
-                  >
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>
-                      {accountAccess.wrongPassword
-                        ? 'Mật khẩu chưa đúng.'
-                        : accountAccess.isExpired
-                        ? 'Tài khoản đã hết hạn 1 năm. Vui lòng nhập mật khẩu để kích hoạt lại.'
-                        : 'Vui lòng nhập mật khẩu để kích hoạt sử dụng trong 1 năm.'}
-                    </span>
+                ) : activeLicense && isCurrentInputActivated ? (
+                  activeLicense.isAdminAccount || isAdmin ? (
+                    <p className="text-xs font-black text-purple-800 flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
+                      <span>
+                        Đang đăng nhập phiên <strong>{activeLicense.accountId}</strong> • Toàn quyền Lớp 1–9 (HSD:{' '}
+                        {formatLicenseDate(activeLicense.expiresAt)})
+                      </span>
+                    </p>
+                  ) : activeLicense.grade === selectedGrade ? (
+                    <p className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>
+                        Đã kích hoạt <strong>{activeLicense.accountId}</strong> (Lớp {activeLicense.grade}) • HSD:{' '}
+                        <strong>{formatLicenseDate(activeLicense.expiresAt)}</strong> • Chống dùng chung real-time
+                      </span>
+                    </p>
+                  ) : (
+                    <div className="text-xs font-bold text-amber-700 flex items-center gap-2 flex-wrap">
+                      <span className="flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span>
+                          Tài khoản {activeLicense.accountId} thuộc Lớp {activeLicense.grade} (HSD:{' '}
+                          {formatLicenseDate(activeLicense.expiresAt)}).
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          soundFx.playClick();
+                          onSelectGrade(activeLicense.grade as GradeLevel);
+                        }}
+                        className="px-2.5 py-0.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-black transition cursor-pointer"
+                      >
+                        Chuyển sang Lớp {activeLicense.grade}
+                      </button>
+                    </div>
+                  )
+                ) : !authReady ? (
+                  <p className="text-xs text-gray-500 font-semibold">Đang kiểm tra phiên đăng nhập...</p>
+                ) : !user ? (
+                  <p className="text-xs text-purple-800 font-semibold">
+                    Đăng nhập Google rồi nhập Tài khoản & Mật khẩu để kích hoạt kho đề theo lớp (hiệu lực 1 năm).
                   </p>
-                ) : accountAccess.isAdmin ? (
+                ) : isAdmin ? (
                   <p className="text-xs font-black text-purple-800 flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
-                    <span>
-                      Tài khoản <strong>Admin</strong> đã kích hoạt • Toàn quyền tất cả khối Lớp 1–9 & mọi tính năng
-                      {accountAccess.expiresAtLabel ? ` (HSD: ${accountAccess.expiresAtLabel})` : ''}
-                    </span>
+                    <span>Đã xác thực quyền Admin ({user.email}) • Toàn quyền Lớp 1–9 & Quản trị tài khoản</span>
                   </p>
-                ) : accountAccess.grade === selectedGrade ? (
-                  <p className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    <span>
-                      Đã kích hoạt kho đề <strong>Lớp {accountAccess.grade}</strong> • Hiệu lực đến{' '}
-                      <strong>{accountAccess.expiresAtLabel}</strong>
-                    </span>
+                ) : (
+                  <p className="text-xs text-gray-600 font-semibold">
+                    Nhập Tài khoản & Mật khẩu rồi bấm <strong>Kích hoạt</strong> để mở khóa kho đề lớp trong 1 năm.
                   </p>
-                ) : accountAccess.grade ? (
-                  <div className="text-xs font-bold text-amber-700 flex items-center justify-between gap-2 flex-wrap">
-                    <span className="flex items-center gap-1.5">
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      <span>
-                        Tài khoản đã kích hoạt cho Lớp {accountAccess.grade} (HSD: {accountAccess.expiresAtLabel}).
-                      </span>
-                    </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {!user ? (
+                  <button
+                    type="button"
+                    disabled={!authReady}
+                    onClick={() => {
+                      soundFx.playClick();
+                      onSignIn();
+                    }}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black text-xs flex items-center gap-1.5 shadow transition cursor-pointer disabled:opacity-50"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Đăng nhập Google</span>
+                  </button>
+                ) : (
+                  (!isCurrentInputActivated || accountPassword.trim().length > 0) &&
+                  accountId.trim().length > 0 && (
                     <button
                       type="button"
+                      disabled={isActivating}
                       onClick={() => {
                         soundFx.playClick();
-                        onSelectGrade(accountAccess.grade!);
+                        onActivateLicense(studentName);
                       }}
-                      className="px-2.5 py-0.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-black transition cursor-pointer"
+                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs flex items-center gap-1.5 shadow transition cursor-pointer disabled:opacity-50"
                     >
-                      Chuyển sang Lớp {accountAccess.grade}
+                      {isActivating ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4" />
+                      )}
+                      <span>{isActivating ? 'Đang kích hoạt...' : 'Kích hoạt tài khoản'}</span>
                     </button>
-                  </div>
-                ) : null}
+                  )
+                )}
               </div>
-            )}
+            </div>
           </div>
 
-          {/* Admin Quick Control Panel (visible only for authenticated Admin account) */}
-          {accountAccess.isAdmin && (
+          {/* Admin Quick Control Panel (visible only for verified Admin) */}
+          {isAdmin && (
             <div className="bg-gradient-to-r from-amber-50 via-purple-50 to-indigo-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-sm">
               <div className="flex items-start gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-purple-600 text-white flex items-center justify-center shrink-0 shadow">
@@ -310,7 +403,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 </div>
                 <div className="text-xs sm:text-sm">
                   <p className="font-black text-purple-950">
-                    Bảng điều khiển Admin ({accountAccess.normalized})
+                    Bảng điều khiển Admin ({user?.email || activeLicense?.accountId})
                   </p>
                   <p className="text-purple-800 font-semibold mt-0.5">
                     {isLoadingPool
@@ -321,7 +414,18 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundFx.playClick();
+                    onOpenAdminDashboard();
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-purple-950 font-black text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Quản trị TK</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -358,9 +462,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
             <div className="grid grid-cols-3 sm:grid-cols-9 gap-2.5">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((g) => {
                 const gradeVal = g as GradeLevel;
-                const hasGh =
-                  isAccountAuthorizedForGrade(accountId, gradeVal, accountPassword) &&
-                  gradeHasGitHubFiles(gradeVal);
+                const hasGh = isGradeAuthorized(gradeVal) && gradeHasGitHubFiles(gradeVal);
                 const isSelected = selectedGrade === gradeVal;
                 return (
                   <button
@@ -378,7 +480,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                   >
                     {hasGh && (
                       <span
-                        title={`Lớp ${g} đã có đề trên GitHub`}
+                        title={`Lớp ${g} đã sẵn sàng kho đề`}
                         className={`absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full ${
                           isSelected ? 'bg-yellow-300 ring-2 ring-white' : 'bg-emerald-500'
                         }`}
