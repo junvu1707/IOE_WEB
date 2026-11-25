@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { soundFx } from '../utils/sound';
 import { LicenseRecord, formatLicenseDate } from '../services/licenseService';
+import { validateAccountId } from '../data/accounts';
 
 interface ExamSetupProps {
   user: FirebaseUser | null;
@@ -134,18 +135,22 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
     return repoIndex.files.some((f) => f.grade === g);
   };
 
+  const normalizedInputId = accountId.trim().toLowerCase();
+  const isAdminAccountId = validateAccountId(accountId).isAdmin;
+  const hasAdminAccess = isAdmin || isAdminAccountId;
+
   const isGradeAuthorized = (g: GradeLevel): boolean => {
-    if (isAdmin) return true;
+    if (hasAdminAccess) return true;
     if (!activeLicense || activeLicense.status !== 'active') return false;
     if (activeLicense.isAdminAccount) return true;
     return activeLicense.grade === g;
   };
 
-  const normalizedInputId = accountId.trim().toLowerCase();
   const isCurrentInputActivated = Boolean(
-    activeLicense &&
-      activeLicense.status === 'active' &&
-      (!normalizedInputId || activeLicense.accountId === normalizedInputId)
+    isAdminAccountId ||
+      (activeLicense &&
+        activeLicense.status === 'active' &&
+        (!normalizedInputId || activeLicense.accountId === normalizedInputId))
   );
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -160,7 +165,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
     localStorage.setItem('oly_student_name', studentName.trim());
     onStartExam({
       studentName: studentName.trim(),
-      accountId: activeLicense?.accountId,
+      accountId: activeLicense?.accountId || (isAdminAccountId ? normalizedInputId : undefined),
       grade: selectedGrade,
       round: selectedRound,
       questionCount,
@@ -248,7 +253,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                   autoComplete="off"
                   spellCheck={false}
                   className={`w-full px-4 py-3.5 rounded-2xl border-3 focus:ring-4 outline-none transition text-gray-800 font-extrabold text-base sm:text-lg shadow-inner bg-purple-50/50 ${
-                    isCurrentInputActivated && activeLicense
+                    isCurrentInputActivated
                       ? 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-100 bg-emerald-50/30'
                       : activationError
                       ? 'border-red-400 focus:border-red-500 focus:ring-red-100 bg-red-50/30'
@@ -274,7 +279,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                     className={`w-full pl-4 pr-11 py-3.5 rounded-2xl border-3 focus:ring-4 outline-none transition text-gray-800 font-extrabold text-base sm:text-lg shadow-inner bg-purple-50/50 ${
                       activationError
                         ? 'border-red-400 focus:border-red-500 focus:ring-red-100 bg-red-50/30'
-                        : isCurrentInputActivated && activeLicense
+                        : isCurrentInputActivated
                         ? 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-100 bg-emerald-50/30'
                         : 'border-purple-200 focus:border-purple-600 focus:ring-purple-100'
                     }`}
@@ -298,6 +303,13 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                   <p className="text-xs font-bold text-red-600 flex items-center gap-1.5">
                     <AlertCircle className="w-4 h-4 shrink-0" />
                     <span>{activationError}</span>
+                  </p>
+                ) : isAdminAccountId ? (
+                  <p className="text-xs font-black text-purple-800 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
+                    <span>
+                      Tài khoản Admin <strong>{normalizedInputId}</strong> đã kích hoạt (không cần mật khẩu) • Toàn quyền Lớp 1–9
+                    </span>
                   </p>
                 ) : activeLicense && isCurrentInputActivated ? (
                   activeLicense.isAdminAccount || isAdmin ? (
@@ -356,7 +368,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                {!user ? (
+                {!user && !isAdminAccountId ? (
                   <button
                     type="button"
                     disabled={!authReady}
@@ -370,6 +382,8 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                     <span>Đăng nhập Google</span>
                   </button>
                 ) : (
+                  user &&
+                  !isAdminAccountId &&
                   (!isCurrentInputActivated || accountPassword.trim().length > 0) &&
                   accountId.trim().length > 0 && (
                     <button
@@ -394,8 +408,8 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
             </div>
           </div>
 
-          {/* Admin Quick Control Panel (visible only for verified Admin) */}
-          {isAdmin && (
+          {/* Admin Quick Control Panel (visible for verified Admin or Admin ID uyenlp1310) */}
+          {hasAdminAccess && (
             <div className="bg-gradient-to-r from-amber-50 via-purple-50 to-indigo-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-sm">
               <div className="flex items-start gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-purple-600 text-white flex items-center justify-center shrink-0 shadow">
@@ -403,7 +417,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 </div>
                 <div className="text-xs sm:text-sm">
                   <p className="font-black text-purple-950">
-                    Bảng điều khiển Admin ({user?.email || activeLicense?.accountId})
+                    Bảng điều khiển Admin ({isAdminAccountId ? normalizedInputId : user?.email || activeLicense?.accountId})
                   </p>
                   <p className="text-purple-800 font-semibold mt-0.5">
                     {isLoadingPool
@@ -415,17 +429,32 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    soundFx.playClick();
-                    onOpenAdminDashboard();
-                  }}
-                  className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-purple-950 font-black text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span>Quản trị TK</span>
-                </button>
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundFx.playClick();
+                      onOpenAdminDashboard();
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-purple-950 font-black text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>Quản trị TK</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!authReady}
+                    onClick={() => {
+                      soundFx.playClick();
+                      onSignIn();
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-purple-950 font-black text-xs flex items-center gap-1.5 shadow transition cursor-pointer disabled:opacity-50"
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>Đăng nhập Quản trị TK</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {

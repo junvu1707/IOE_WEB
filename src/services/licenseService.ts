@@ -141,8 +141,8 @@ export async function activateOrTakeoverLicense(params: {
     };
   }
 
-  // Kiểm tra mật khẩu (Admin đã xác thực email vẫn cần nhập đúng pass khi kích hoạt ID mới, hoặc bỏ qua nếu đã là chủ phiên)
-  if (!isValidAccountPassword(password)) {
+  // Tài khoản Admin (uyenlp1310) không cần nhập mật khẩu; tài khoản học sinh bắt buộc đúng mật khẩu
+  if (!check.isAdmin && !isValidAccountPassword(password)) {
     return { ok: false, error: 'Mật khẩu chưa đúng.' };
   }
 

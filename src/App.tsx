@@ -31,6 +31,7 @@ import {
   getStoredLocalSession,
   subscribeToActiveLicense,
 } from './services/licenseService';
+import { validateAccountId } from './data/accounts';
 import { soundFx } from './utils/sound';
 
 export default function App() {
@@ -67,15 +68,18 @@ export default function App() {
 
   const loadRequestIdRef = useRef(0);
 
+  const isAdminAccountId = validateAccountId(accountId).isAdmin;
+  const hasAdminAccess = isAdmin || isAdminAccountId;
+
   const isGradeAuthorizedNow = useCallback(
-    (grade: GradeLevel, adminFlag = isAdmin, licenseObj = activeLicense): boolean => {
+    (grade: GradeLevel, adminFlag = hasAdminAccess, licenseObj = activeLicense): boolean => {
       if (adminFlag) return true;
       if (!licenseObj || licenseObj.status !== 'active') return false;
       if (licenseObj.expiresAt && licenseObj.expiresAt.toMillis() <= Date.now()) return false;
       if (licenseObj.isAdminAccount) return true;
       return licenseObj.grade === grade;
     },
-    [isAdmin, activeLicense]
+    [hasAdminAccess, activeLicense]
   );
 
   const loadPool = useCallback(
@@ -196,7 +200,7 @@ export default function App() {
 
   // 4. Auto-sync question pool whenever grade, round, repoIndex, admin status, or activeLicense changes
   useEffect(() => {
-    const authorized = isGradeAuthorizedNow(selectedGrade, isAdmin, activeLicense);
+    const authorized = isGradeAuthorizedNow(selectedGrade, hasAdminAccess, activeLicense);
     let targetRound = selectedRound;
 
     if (authorized && repoIndex && !repoIndex.apiLimited) {
@@ -211,7 +215,7 @@ export default function App() {
     }
 
     loadPool(selectedGrade, targetRound, repoIndex, false, authorized);
-  }, [selectedGrade, selectedRound, repoIndex, isAdmin, activeLicense, isGradeAuthorizedNow, loadPool]);
+  }, [selectedGrade, selectedRound, repoIndex, hasAdminAccess, activeLicense, isGradeAuthorizedNow, loadPool]);
 
   // Auto-select the license's grade as soon as a student license becomes active
   useEffect(() => {
@@ -229,8 +233,9 @@ export default function App() {
       const adminStatus = await checkIsAdminUser(signedInUser);
       setIsAdmin(adminStatus);
 
-      // If user already typed Account ID & Password before clicking Sign In, activate immediately in one flow
-      if (accountId.trim() && accountPassword.trim()) {
+      // If user already typed Account ID & Password (or passwordless Admin ID) before clicking Sign In, activate immediately
+      const typedAccountCheck = validateAccountId(accountId);
+      if (accountId.trim() && (accountPassword.trim() || (typedAccountCheck.isAdmin && adminStatus))) {
         setIsActivating(true);
         try {
           const result = await activateOrTakeoverLicense({
