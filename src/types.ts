@@ -59,9 +59,18 @@ export interface LoadedExamPool {
   typeCounts: Record<QuestionType, number>;
 }
 
+export interface RoundCountSummary {
+  round: ContestRound;
+  count: number;
+  isTestOnly: boolean;
+  source: ExamSourceType;
+  typeCounts: Record<QuestionType, number>;
+}
+
 export interface ExamConfig {
   studentName: string;
   accountId?: string;
+  isAdminMode?: boolean;
   parentEmail?: string;
   parentEmailPassword?: string;
   grade: GradeLevel;

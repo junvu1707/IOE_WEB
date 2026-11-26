@@ -1,25 +1,14 @@
 import React from 'react';
-import { User } from 'firebase/auth';
-import { History, Smile, CloudDownload, ShieldCheck, LogIn, LogOut } from 'lucide-react';
+import { History, Smile, CloudDownload } from 'lucide-react';
 import { soundFx } from '../utils/sound';
 
 interface HeaderProps {
-  user: User | null;
-  isAdmin?: boolean;
-  onSignIn: () => void;
-  onSignOut: () => void;
-  onOpenAdminDashboard: () => void;
   onOpenHistory: () => void;
   onOpenGitHubConfig: () => void;
   onHome: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  user,
-  isAdmin,
-  onSignIn,
-  onSignOut,
-  onOpenAdminDashboard,
   onOpenHistory,
   onOpenGitHubConfig,
   onHome,
@@ -51,20 +40,6 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         <div className="flex items-center flex-wrap gap-2 sm:gap-2.5">
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => {
-                soundFx.playClick();
-                onOpenAdminDashboard();
-              }}
-              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-gradient-to-r from-amber-300 to-yellow-400 hover:from-amber-200 hover:to-yellow-300 text-purple-950 text-xs sm:text-sm font-black shadow-lg border-2 border-white/70 transition transform hover:scale-105 cursor-pointer"
-            >
-              <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
-              <span>Quản trị TK</span>
-            </button>
-          )}
-
           <button
             type="button"
             onClick={() => {
@@ -88,35 +63,6 @@ export const Header: React.FC<HeaderProps> = ({
             <History className="w-4 h-4" />
             <span>Lịch Sử Thi</span>
           </button>
-
-          {user ? (
-            <button
-              type="button"
-              onClick={() => {
-                soundFx.playClick();
-                onSignOut();
-              }}
-              title={`Đang đăng nhập: ${user.email || user.displayName || ''}`}
-              className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 text-white px-3 py-2.5 rounded-2xl text-xs font-bold border border-white/30 transition cursor-pointer"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden md:inline max-w-[110px] truncate">
-                {user.displayName || user.email?.split('@')[0]}
-              </span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                soundFx.playClick();
-                onSignIn();
-              }}
-              className="flex items-center gap-1.5 bg-white text-purple-900 hover:bg-purple-50 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-black shadow-lg transition transform hover:scale-105 cursor-pointer"
-            >
-              <LogIn className="w-4 h-4" />
-              <span>Đăng nhập</span>
-            </button>
-          )}
         </div>
       </div>
     </header>

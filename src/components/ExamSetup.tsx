@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User as FirebaseUser } from 'firebase/auth';
-import { GradeLevel, ContestRound, ExamConfig, GitHubRepoIndex, LoadedExamPool } from '../types';
+import {
+  GradeLevel,
+  ContestRound,
+  ExamConfig,
+  GitHubRepoIndex,
+  LoadedExamPool,
+  RoundCountSummary,
+} from '../types';
 import {
   User,
   KeyRound,
@@ -18,41 +24,27 @@ import {
   FileText,
   Play,
   Rocket,
-  LogIn,
   Users,
-  ShieldAlert,
   Mail,
   Key,
 } from 'lucide-react';
 import { soundFx } from '../utils/sound';
-import { LicenseRecord } from '../services/licenseService';
 import { validateAccountId } from '../data/accounts';
 
 interface ExamSetupProps {
-  user: FirebaseUser | null;
-  authReady: boolean;
-  isAdmin: boolean;
-  activeLicense: LicenseRecord | null;
   selectedGrade: GradeLevel;
   selectedRound: ContestRound;
   accountId: string;
-  accountPassword: string;
-  isActivating: boolean;
-  activationError: string | null;
-  kickedMessage: string | null;
   repoIndex: GitHubRepoIndex | null;
   loadedPool: LoadedExamPool | null;
   isLoadingPool: boolean;
+  roundCounts: Partial<Record<ContestRound, RoundCountSummary>>;
+  isLoadingRoundCounts: boolean;
   onSelectGrade: (grade: GradeLevel) => void;
   onSelectRound: (round: ContestRound) => void;
   onChangeAccountId: (accountId: string) => void;
-  onChangeAccountPassword: (password: string) => void;
-  onActivateLicense: (studentName: string) => void;
-  onSignIn: () => void;
-  onDismissKicked: () => void;
   onRefreshGitHub: () => void;
   onOpenGitHubConfig: () => void;
-  onOpenAdminDashboard: () => void;
   onStartExam: (config: ExamConfig) => void;
 }
 
@@ -93,28 +85,29 @@ const ROUND_NAMES: Record<
 };
 
 export const ExamSetup: React.FC<ExamSetupProps> = ({
-  user,
-  authReady,
-  isAdmin,
-  activeLicense,
   selectedGrade,
   selectedRound,
   accountId,
   repoIndex,
   loadedPool,
   isLoadingPool,
+  roundCounts,
+  isLoadingRoundCounts,
   onSelectGrade,
   onSelectRound,
   onChangeAccountId,
   onRefreshGitHub,
   onOpenGitHubConfig,
-  onOpenAdminDashboard,
   onStartExam,
 }) => {
   const [studentName, setStudentName] = useState(localStorage.getItem('oly_student_name') || '');
   const [parentEmail, setParentEmail] = useState(localStorage.getItem('oly_parent_email') || '');
-  const [parentEmailPassword, setParentEmailPassword] = useState(localStorage.getItem('oly_parent_email_password') || '');
-  const [minStudyMinutes, setMinStudyMinutes] = useState<number>(Number(localStorage.getItem('oly_min_study_minutes') || '0'));
+  const [parentEmailPassword, setParentEmailPassword] = useState(
+    localStorage.getItem('oly_parent_email_password') || ''
+  );
+  const [minStudyMinutes, setMinStudyMinutes] = useState<number>(
+    Number(localStorage.getItem('oly_min_study_minutes') || '0')
+  );
   const [parentPin, setParentPin] = useState(localStorage.getItem('oly_parent_pin') || '1234');
 
   const [questionCount, setQuestionCount] = useState<number>(200);
@@ -124,54 +117,67 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
   const [showParentPin, setShowParentPin] = useState<boolean>(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
+  const accountCheck = validateAccountId(accountId);
+  const isAdminAccountId = accountCheck.isAdmin;
+
   useEffect(() => {
-    if (studentName.trim()) {
+    if (studentName.trim() || isAdminAccountId) {
       setNameError('');
     }
-  }, [studentName]);
+  }, [studentName, isAdminAccountId]);
 
   const gradeHasGitHubFiles = (g: GradeLevel): boolean => {
     if (!repoIndex || repoIndex.apiLimited) return false;
     return repoIndex.files.some((f) => f.grade === g);
   };
 
-  const normalizedInputId = accountId.trim().toLowerCase();
-  const isAdminAccountId = validateAccountId(accountId).isAdmin;
-  const hasAdminAccess = isAdmin || isAdminAccountId;
-
   const isGradeAuthorized = (g: GradeLevel): boolean => {
-    if (hasAdminAccess) return true;
-    if (!activeLicense || activeLicense.status !== 'active') return false;
-    if (activeLicense.isAdminAccount) return true;
-    return activeLicense.grade === g;
+    if (isAdminAccountId) return true;
+    return accountCheck.valid && accountCheck.grade === g;
   };
+
+  const totalRealQuestionsForGrade = ([1, 2, 3, 4, 5] as ContestRound[]).reduce((sum, r) => {
+    const info = roundCounts[r];
+    if (!info || info.isTestOnly) return sum;
+    return sum + info.count;
+  }, 0);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!studentName.trim()) {
+
+    // Riêng tài khoản Admin uyenlp1310 không bắt buộc nhập bất cứ thông tin nào
+    if (!isAdminAccountId && !studentName.trim()) {
       soundFx.playError();
       setNameError('Vui lòng nhập họ và tên của bé trước khi bắt đầu nhé!');
       nameInputRef.current?.focus();
       return;
     }
+
     soundFx.playSuccess();
-    localStorage.setItem('oly_student_name', studentName.trim());
-    localStorage.setItem('oly_parent_email', parentEmail.trim());
-    localStorage.setItem('oly_parent_email_password', parentEmailPassword);
-    localStorage.setItem('oly_min_study_minutes', String(minStudyMinutes));
-    localStorage.setItem('oly_parent_pin', parentPin || '1234');
+    const resolvedName = studentName.trim() || (isAdminAccountId ? 'Admin (uyenlp1310)' : 'Học sinh');
+
+    if (studentName.trim()) {
+      localStorage.setItem('oly_student_name', studentName.trim());
+    }
+    if (!isAdminAccountId) {
+      localStorage.setItem('oly_parent_email', parentEmail.trim());
+      localStorage.setItem('oly_parent_email_password', parentEmailPassword);
+      localStorage.setItem('oly_min_study_minutes', String(minStudyMinutes));
+      localStorage.setItem('oly_parent_pin', parentPin.trim() || '1234');
+    }
 
     onStartExam({
-      studentName: studentName.trim(),
-      accountId: accountId.trim() || (isAdminAccountId ? normalizedInputId : undefined),
-      parentEmail: parentEmail.trim(),
-      parentEmailPassword: parentEmailPassword,
+      studentName: resolvedName,
+      accountId: accountCheck.valid ? accountCheck.normalized : accountId.trim() || undefined,
+      isAdminMode: isAdminAccountId,
+      parentEmail: isAdminAccountId ? undefined : parentEmail.trim(),
+      parentEmailPassword: isAdminAccountId ? undefined : parentEmailPassword,
       grade: selectedGrade,
       round: selectedRound,
       questionCount,
       timeLimitSeconds: timeLimitMinutes * 60,
-      minStudyMinutes,
-      parentPin: parentPin || '1234',
+      minStudyMinutes: isAdminAccountId ? 0 : minStudyMinutes,
+      parentPin: isAdminAccountId ? undefined : parentPin.trim() || '1234',
       source: loadedPool?.source,
       sourceFileName: loadedPool?.fileName,
     });
@@ -197,15 +203,15 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 sm:p-10 space-y-8 relative z-10">
-          {/* 1. Student Name, Email PH & Mật khẩu email, ID tài khoản */}
+          {/* 1. Student Name, Account ID, Parent Email & Email Password (Local Only) */}
           <div className="space-y-4 bg-purple-50/60 p-6 rounded-3xl border-2 border-purple-200">
             <h3 className="text-base font-black text-purple-950 flex items-center gap-2">
               <Users className="w-5 h-5 text-purple-600" />
-              <span>Thông tin tài khoản & phụ huynh (Lưu cục bộ trên máy)</span>
+              <span>Thông tin tài khoản (Lưu cục bộ trên máy)</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Col 1: Student Name */}
+              {/* Col 1: Student Name (no example) */}
               <div className="space-y-2">
                 <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
                   <User className="w-4 h-4 text-pink-600" />
@@ -226,7 +232,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 {nameError && <p className="text-xs font-bold text-red-600">{nameError}</p>}
               </div>
 
-              {/* Col 2: Account ID */}
+              {/* Col 2: Account ID (no example) */}
               <div className="space-y-2">
                 <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
                   <KeyRound className="w-4 h-4 text-indigo-600" />
@@ -236,104 +242,173 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                   type="text"
                   value={accountId}
                   onChange={(e) => onChangeAccountId(e.target.value)}
-                  placeholder="Ví dụ: l1_00001 hoặc uyenlp1310..."
+                  placeholder="Nhập ID tài khoản..."
                   autoComplete="off"
                   spellCheck={false}
-                  className="w-full px-4 py-3 rounded-2xl border-3 border-purple-200 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none transition text-gray-800 font-extrabold text-base shadow-inner bg-white"
+                  className={`w-full px-4 py-3 rounded-2xl border-3 focus:ring-4 outline-none transition text-gray-800 font-extrabold text-base shadow-inner bg-white ${
+                    accountCheck.valid
+                      ? 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-100 bg-emerald-50/30'
+                      : accountId.trim()
+                      ? 'border-amber-400 focus:border-amber-500 focus:ring-amber-100'
+                      : 'border-purple-200 focus:border-indigo-600 focus:ring-indigo-100'
+                  }`}
                 />
               </div>
 
-              {/* Col 3: Parent Email */}
+              {/* Col 3 & 4: Parent Email & Email Password (hidden for Admin uyenlp1310 since Admin needs nothing) */}
+              {!isAdminAccountId && (
+                <>
+                  <div className="space-y-2">
+                    <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
+                      <Mail className="w-4 h-4 text-purple-600" />
+                      <span>Email:</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={parentEmail}
+                      onChange={(e) => {
+                        setParentEmail(e.target.value);
+                        localStorage.setItem('oly_parent_email', e.target.value);
+                      }}
+                      placeholder="Email PH dùng đăng ký..."
+                      autoComplete="email"
+                      className="w-full px-4 py-3 rounded-2xl border-3 border-purple-200 focus:border-purple-600 focus:ring-4 focus:ring-purple-100 outline-none transition text-gray-800 font-extrabold text-base shadow-inner bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
+                      <Lock className="w-4 h-4 text-purple-600" />
+                      <span>Mật khẩu:</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showEmailPassword ? 'text' : 'password'}
+                        value={parentEmailPassword}
+                        onChange={(e) => {
+                          setParentEmailPassword(e.target.value);
+                          localStorage.setItem('oly_parent_email_password', e.target.value);
+                        }}
+                        placeholder="Mật khẩu email..."
+                        autoComplete="current-password"
+                        className="w-full pl-4 pr-11 py-3 rounded-2xl border-3 border-purple-200 focus:border-purple-600 focus:ring-4 focus:ring-purple-100 outline-none transition text-gray-800 font-extrabold text-base shadow-inner bg-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEmailPassword((prev) => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-purple-500 hover:text-purple-800 p-1 cursor-pointer"
+                        aria-label={showEmailPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                      >
+                        {showEmailPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Account recognition status line */}
+            {isAdminAccountId ? (
+              <p className="text-xs font-black text-purple-800 flex items-center gap-1.5 pt-1">
+                <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
+                <span>
+                  Tài khoản Admin <strong>{accountCheck.normalized}</strong> • Không cần nhập thêm thông tin hay khóa phụ huynh • Toàn quyền Lớp 1–9 & xem số câu mỗi vòng
+                </span>
+              </p>
+            ) : accountCheck.valid && accountCheck.grade ? (
+              accountCheck.grade === selectedGrade ? (
+                <p className="text-xs font-bold text-emerald-700 flex items-center gap-1.5 pt-1">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>
+                    Đã kích hoạt tài khoản <strong>{accountCheck.normalized}</strong> (Kho đề Lớp {accountCheck.grade})
+                  </span>
+                </p>
+              ) : (
+                <div className="text-xs font-bold text-amber-700 flex items-center gap-2 flex-wrap pt-1">
+                  <span className="flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>
+                      Tài khoản <strong>{accountCheck.normalized}</strong> thuộc Lớp {accountCheck.grade}.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundFx.playClick();
+                      onSelectGrade(accountCheck.grade!);
+                    }}
+                    className="px-2.5 py-0.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-black transition cursor-pointer"
+                  >
+                    Chuyển sang Lớp {accountCheck.grade}
+                  </button>
+                </div>
+              )
+            ) : accountId.trim() ? (
+              <p className="text-xs font-bold text-amber-700 flex items-center gap-1.5 pt-1">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>ID tài khoản chưa hợp lệ (đang dùng chế độ làm thử).</span>
+              </p>
+            ) : null}
+          </div>
+
+          {/* Parent Controls: Min Study Time & Parent PIN (not needed for Admin uyenlp1310) */}
+          {!isAdminAccountId && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-indigo-50/60 p-6 rounded-3xl border-2 border-indigo-200">
               <div className="space-y-2">
-                <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
-                  <Mail className="w-4 h-4 text-purple-600" />
-                  <span>Email PH dùng đăng ký:</span>
+                <label className="block text-sm font-black text-indigo-950 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-indigo-600" />
+                  <span>Thời gian học tối thiểu:</span>
                 </label>
-                <input
-                  type="email"
-                  value={parentEmail}
-                  onChange={(e) => setParentEmail(e.target.value)}
-                  placeholder="Nhập email phụ huynh..."
-                  autoComplete="email"
-                  className="w-full px-4 py-3 rounded-2xl border-3 border-purple-200 focus:border-purple-600 focus:ring-4 focus:ring-purple-100 outline-none transition text-gray-800 font-extrabold text-base shadow-inner bg-white"
-                />
+                <select
+                  value={minStudyMinutes}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setMinStudyMinutes(val);
+                    localStorage.setItem('oly_min_study_minutes', String(val));
+                  }}
+                  className="w-full px-4 py-3 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-white font-bold text-gray-800 shadow-inner"
+                >
+                  <option value={0}>Không giới hạn (Thoải mái)</option>
+                  <option value={10}>Tối thiểu 10 phút</option>
+                  <option value={15}>Tối thiểu 15 phút</option>
+                  <option value={30}>Tối thiểu 30 phút</option>
+                  <option value={45}>Tối thiểu 45 phút</option>
+                  <option value={60}>Tối thiểu 60 phút</option>
+                </select>
               </div>
 
-              {/* Col 4: Email Password */}
               <div className="space-y-2">
-                <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-purple-600" />
-                  <span>Mật khẩu email:</span>
+                <label className="block text-sm font-black text-indigo-950 flex items-center gap-2">
+                  <Key className="w-4 h-4 text-indigo-600" />
+                  <span>Mật khẩu Phụ huynh (để thoát chế độ thi):</span>
                 </label>
                 <div className="relative">
                   <input
-                    type={showEmailPassword ? 'text' : 'password'}
-                    value={parentEmailPassword}
-                    onChange={(e) => setParentEmailPassword(e.target.value)}
-                    placeholder="Mật khẩu email..."
-                    autoComplete="current-password"
-                    className="w-full pl-4 pr-11 py-3 rounded-2xl border-3 border-purple-200 focus:border-purple-600 focus:ring-4 focus:ring-purple-100 outline-none transition text-gray-800 font-extrabold text-base shadow-inner bg-white"
+                    type={showParentPin ? 'text' : 'password'}
+                    value={parentPin}
+                    onChange={(e) => {
+                      setParentPin(e.target.value);
+                      localStorage.setItem('oly_parent_pin', e.target.value);
+                    }}
+                    placeholder="Mặc định: 1234"
+                    maxLength={16}
+                    className="w-full pl-4 pr-11 py-3 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-white font-black text-gray-800 shadow-inner"
                   />
                   <button
                     type="button"
-                    onClick={() => setShowEmailPassword((prev) => !prev)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-purple-500 hover:text-purple-800 p-1 cursor-pointer"
+                    onClick={() => setShowParentPin((prev) => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500 hover:text-indigo-800 p-1 cursor-pointer"
+                    aria-label={showParentPin ? 'Ẩn mật khẩu phụ huynh' : 'Hiện mật khẩu phụ huynh'}
                   >
-                    {showEmailPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    {showParentPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Parent Controls: Min Study Time & Parent PIN */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-indigo-50/60 p-6 rounded-3xl border-2 border-indigo-200">
-            <div className="space-y-2">
-              <label className="block text-sm font-black text-indigo-950 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-indigo-600" />
-                <span>Thời gian học tối thiểu:</span>
-              </label>
-              <select
-                value={minStudyMinutes}
-                onChange={(e) => setMinStudyMinutes(Number(e.target.value))}
-                className="w-full px-4 py-3 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-white font-bold text-gray-800 shadow-inner"
-              >
-                <option value={0}>Không giới hạn (Thoải mái)</option>
-                <option value={10}>Tối thiểu 10 phút</option>
-                <option value={15}>Tối thiểu 15 phút</option>
-                <option value={30}>Tối thiểu 30 phút</option>
-                <option value={45}>Tối thiểu 45 phút</option>
-                <option value={60}>Tối thiểu 60 phút</option>
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-sm font-black text-indigo-950 flex items-center gap-2">
-                <Key className="w-4 h-4 text-indigo-600" />
-                <span>Mật khẩu Phụ huynh (để thoát/nộp sớm):</span>
-              </label>
-              <div className="relative">
-                <input
-                  type={showParentPin ? 'text' : 'password'}
-                  value={parentPin}
-                  onChange={(e) => setParentPin(e.target.value)}
-                  placeholder="Mặc định: 1234"
-                  maxLength={16}
-                  className="w-full pl-4 pr-11 py-3 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-white font-black text-gray-800 shadow-inner"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowParentPin((prev) => !prev)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500 hover:text-indigo-800 p-1 cursor-pointer"
-                >
-                  {showParentPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Admin Quick Control Panel (visible for verified Admin or Admin ID uyenlp1310) */}
-          {hasAdminAccess && (
+          {/* Admin Quick Control Panel (visible only for Admin ID uyenlp1310) */}
+          {isAdminAccountId && (
             <div className="bg-gradient-to-r from-amber-50 via-purple-50 to-indigo-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-sm">
               <div className="flex items-start gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-purple-600 text-white flex items-center justify-center shrink-0 shadow">
@@ -341,7 +416,10 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 </div>
                 <div className="text-xs sm:text-sm">
                   <p className="font-black text-purple-950">
-                    Bảng điều khiển Admin ({isAdminAccountId ? normalizedInputId : user?.email || accountId})
+                    Bảng điều khiển Admin ({accountCheck.normalized}) • Tổng đề Lớp {selectedGrade}:{' '}
+                    <span className="text-emerald-700">
+                      {isLoadingRoundCounts ? 'Đang đếm...' : `${totalRealQuestionsForGrade.toLocaleString('vi-VN')} câu`}
+                    </span>
                   </p>
                   <p className="text-purple-800 font-semibold mt-0.5">
                     {isLoadingPool
@@ -353,29 +431,16 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      soundFx.playClick();
-                      onOpenAdminDashboard();
-                    }}
-                    className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-purple-950 font-black text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
-                  >
-                    <Users className="w-3.5 h-3.5" />
-                    <span>Quản trị TK</span>
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={() => {
                     soundFx.playClick();
                     onRefreshGitHub();
                   }}
-                  disabled={isLoadingPool}
+                  disabled={isLoadingPool || isLoadingRoundCounts}
                   className="px-3.5 py-2 rounded-xl bg-white hover:bg-purple-100 border-2 border-purple-200 text-purple-900 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingPool ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingPool || isLoadingRoundCounts ? 'animate-spin' : ''}`} />
                   <span>Cập nhật đề</span>
                 </button>
                 <button
@@ -415,7 +480,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                     className={`relative py-3.5 rounded-2xl font-black text-base sm:text-lg transition flex flex-col items-center justify-center border-3 shadow-md transform hover:scale-110 cursor-pointer ${
                       isSelected
                         ? 'bg-gradient-to-br from-pink-500 to-purple-600 border-yellow-300 text-white shadow-pink-300/50 scale-105 ring-4 ring-purple-200'
-                        : 'bg-gradient-to-br from-gray-50 to-purple-50/40 border-purple-200 text-purple-900 hover:bg-purple-150'
+                        : 'bg-gradient-to-br from-gray-50 to-purple-50/40 border-purple-200 text-purple-900 hover:bg-purple-100'
                     }`}
                   >
                     {hasGh && (
@@ -434,7 +499,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
             </div>
           </div>
 
-          {/* 3. Select Contest Round (Icon on top, text below) */}
+          {/* 3. Select Contest Round (Icon on top, text below; Admin sees exact question counts per round) */}
           <div className="space-y-3">
             <label className="block text-sm font-black text-purple-900 flex items-center gap-2">
               <Trophy className="w-5 h-5 text-amber-500" />
@@ -445,6 +510,7 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                 const roundVal = r as ContestRound;
                 const info = ROUND_NAMES[roundVal];
                 const isSelected = selectedRound === roundVal;
+                const countInfo = roundCounts[roundVal];
 
                 return (
                   <button
@@ -473,6 +539,34 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
                     >
                       {info.name}
                     </h4>
+
+                    {/* Per-round question count badge — ONLY visible for Admin uyenlp1310 */}
+                    {isAdminAccountId && (
+                      <div className="mt-auto pt-1 w-full">
+                        {isLoadingRoundCounts && !countInfo ? (
+                          <span className="inline-block px-2 py-0.5 rounded-lg text-[11px] font-bold bg-purple-100 text-purple-700 animate-pulse">
+                            Đang đếm...
+                          </span>
+                        ) : countInfo ? (
+                          countInfo.isTestOnly ? (
+                            <span className="inline-block px-2 py-0.5 rounded-lg text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              Chưa có đề (Test: {countInfo.count})
+                            </span>
+                          ) : (
+                            <div className="space-y-1">
+                              <span className="inline-block px-2.5 py-0.5 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                {countInfo.count.toLocaleString('vi-VN')} câu
+                              </span>
+                              <div className="text-[10px] font-bold text-purple-700 leading-tight">
+                                TN:{countInfo.typeCounts.tn} • Nối:{countInfo.typeCounts.noi}
+                                <br />
+                                ĐT:{countInfo.typeCounts.dt} • SX:{countInfo.typeCounts.sx}
+                              </div>
+                            </div>
+                          )
+                        ) : null}
+                      </div>
+                    )}
                   </button>
                 );
               })}
@@ -530,7 +624,13 @@ export const ExamSetup: React.FC<ExamSetupProps> = ({
               className="w-full py-5 bg-gradient-to-r from-pink-500 via-purple-600 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 disabled:opacity-60 text-white font-black text-xl rounded-3xl shadow-xl hover:shadow-2xl transition transform hover:scale-[1.02] flex items-center justify-center gap-3 cursor-pointer border-4 border-yellow-300"
             >
               <Play className="w-7 h-7 fill-current animate-bounce text-yellow-300" />
-              <span>{isLoadingPool ? 'ĐANG TẢI ĐỀ THI...' : 'BẮT ĐẦU VÀO THI NGAY (TOÀN MÀN HÌNH) 🚀'}</span>
+              <span>
+                {isLoadingPool
+                  ? 'ĐANG TẢI ĐỀ THI...'
+                  : isAdminAccountId
+                  ? 'BẮT ĐẦU VÀO THI NGAY 🚀'
+                  : 'BẮT ĐẦU VÀO THI NGAY (TOÀN MÀN HÌNH) 🚀'}
+              </span>
             </button>
           </div>
         </form>

@@ -8,6 +8,7 @@ import {
   GitHubRepoIndex,
   LoadedExamPool,
   MatchingPair,
+  RoundCountSummary,
 } from '../types';
 
 export const DEFAULT_GITHUB_REPO = 'https://github.com/junvu1707/IOE_de';
@@ -634,6 +635,44 @@ export async function loadQuestionsForSelection(
     fileName: expectedFile,
     typeCounts: countQuestionTypes(testQuestions),
   };
+}
+
+/**
+ * Load exact question counts for all 5 contest rounds of a grade (used by Admin uyenlp1310).
+ * Reuses githubFileCache so switching rounds afterwards is instant.
+ */
+export async function loadRoundCountsForGrade(
+  grade: GradeLevel,
+  options?: {
+    forceRefresh?: boolean;
+    repoIndex?: GitHubRepoIndex | null;
+    repoUrlOverride?: string;
+  }
+): Promise<Record<ContestRound, RoundCountSummary>> {
+  const rounds: ContestRound[] = [1, 2, 3, 4, 5];
+  const pools = await Promise.all(
+    rounds.map((r) =>
+      loadQuestionsForSelection(grade, r, {
+        forceRefresh: options?.forceRefresh,
+        repoIndex: options?.repoIndex,
+        repoUrlOverride: options?.repoUrlOverride,
+        allowGitHub: true,
+      })
+    )
+  );
+
+  const result = {} as Record<ContestRound, RoundCountSummary>;
+  pools.forEach((pool, idx) => {
+    const r = rounds[idx];
+    result[r] = {
+      round: r,
+      count: pool.questions.length,
+      isTestOnly: pool.source === 'test',
+      source: pool.source,
+      typeCounts: pool.typeCounts,
+    };
+  });
+  return result;
 }
 
 /**

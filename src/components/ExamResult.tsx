@@ -1,12 +1,31 @@
 import React, { useEffect, useState } from 'react';
 import { ExamResultData, Question } from '../types';
-import { Trophy, CheckCircle2, XCircle, Sparkles, RefreshCcw, Home, Brain, Star, Award } from 'lucide-react';
+import {
+  Trophy,
+  CheckCircle2,
+  XCircle,
+  Sparkles,
+  RefreshCcw,
+  Home,
+  Brain,
+  Star,
+  Award,
+  Lock,
+  Eye,
+  EyeOff,
+  Clock,
+} from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { soundFx } from '../utils/sound';
 import { FormattedText } from './FormattedText';
 
 interface ExamResultProps {
   result: ExamResultData;
+  isLocked?: boolean;
+  minStudyMinutes?: number;
+  totalStudySeconds?: number;
+  parentPin?: string;
+  parentEmailPassword?: string;
   onRetry: () => void;
   onHome: () => void;
 }
@@ -30,10 +49,28 @@ function formatCorrectAnswer(q: Question): string {
   return String(q.correct || '');
 }
 
-export const ExamResult: React.FC<ExamResultProps> = ({ result, onRetry, onHome }) => {
+export const ExamResult: React.FC<ExamResultProps> = ({
+  result,
+  isLocked = false,
+  minStudyMinutes = 0,
+  totalStudySeconds = 0,
+  parentPin = '1234',
+  parentEmailPassword = '',
+  onRetry,
+  onHome,
+}) => {
   const [aiAnalysis, setAiAnalysis] = useState<string>(result.aiAnalysis || '');
   const [loadingAi, setLoadingAi] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'incorrect' | 'ai'>('overview');
+
+  // Parent PIN modal state when trying to leave locked study mode to Home
+  const [showParentExitModal, setShowParentExitModal] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [showPinText, setShowPinText] = useState(false);
+
+  const minStudySeconds = minStudyMinutes * 60;
+  const remainingStudySeconds = Math.max(0, minStudySeconds - totalStudySeconds);
 
   useEffect(() => {
     if (result.percentage >= 50) {
@@ -147,6 +184,32 @@ ${topTypes}
     return `${m} phút ${s} giây`;
   };
 
+  const handleRequestHome = () => {
+    soundFx.playClick();
+    if (!isLocked) {
+      onHome();
+      return;
+    }
+    setPinInput('');
+    setPinError('');
+    setShowParentExitModal(true);
+  };
+
+  const handleConfirmParentExit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const entered = pinInput.trim();
+    const validPin = parentPin.trim() || '1234';
+    const validEmailPass = parentEmailPassword.trim();
+    if (entered && (entered === validPin || (validEmailPass && entered === validEmailPass))) {
+      soundFx.playSuccess();
+      setShowParentExitModal(false);
+      onHome();
+    } else {
+      soundFx.playError();
+      setPinError('Mật khẩu Phụ huynh không đúng!');
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
       <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl border-4 border-purple-200 overflow-hidden">
@@ -159,14 +222,23 @@ ${topTypes}
             <Trophy className="w-12 h-12 text-yellow-300" />
           </div>
           <h2 className="text-3xl sm:text-4xl font-black mb-2 tracking-tight drop-shadow-md">
-            {result.percentage >= 80 ? 'XUẤT SẮC! BÉ LÀ SIÊU SAO 🌟' : result.percentage >= 50 ? 'LÀM TỐT LẮM! 🏅' : 'CỐ GẮNG HƠN NỮA NHÉ! 💪'}
+            {result.percentage >= 80
+              ? 'XUẤT SẮC! BÉ LÀ SIÊU SAO 🌟'
+              : result.percentage >= 50
+              ? 'LÀM TỐT LẮM! 🏅'
+              : 'CỐ GẮNG HƠN NỮA NHÉ! 💪'}
           </h2>
-          <p className="text-pink-100 font-bold text-base">Thí sinh: <strong className="text-yellow-300">{result.studentName}</strong> • {result.roundName} (Lớp {result.grade})</p>
+          <p className="text-pink-100 font-bold text-base">
+            Thí sinh: <strong className="text-yellow-300">{result.studentName}</strong> • {result.roundName} (Lớp{' '}
+            {result.grade})
+          </p>
 
-          <div className="flex justify-center gap-4 mt-6">
+          <div className="flex flex-wrap justify-center gap-4 mt-6">
             <div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl border-2 border-white/30 text-center shadow-lg">
               <span className="block text-xs font-bold text-pink-200">Điểm số</span>
-              <span className="text-3xl font-black text-yellow-300">{result.score} / {result.totalQuestions}</span>
+              <span className="text-3xl font-black text-yellow-300">
+                {result.score} / {result.totalQuestions}
+              </span>
             </div>
             <div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl border-2 border-white/30 text-center shadow-lg">
               <span className="block text-xs font-bold text-pink-200">Tỷ lệ đúng</span>
@@ -177,16 +249,30 @@ ${topTypes}
               <span className="text-xl font-black text-white">{formatTime(result.timeSpentSeconds)}</span>
             </div>
           </div>
+
+          {isLocked && minStudySeconds > 0 && (
+            <div className="mt-4 inline-flex items-center gap-2 bg-black/25 px-4 py-1.5 rounded-full text-xs font-bold text-yellow-200 border border-white/20">
+              <Clock className="w-4 h-4" />
+              {remainingStudySeconds > 0 ? (
+                <span>
+                  Tổng thời gian học: {formatTime(totalStudySeconds)} / {minStudyMinutes} phút tối thiểu (còn thiếu{' '}
+                  {formatTime(remainingStudySeconds)})
+                </span>
+              ) : (
+                <span>Đã hoàn thành thời gian học tối thiểu ({minStudyMinutes} phút)!</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Tab navigation */}
-        <div className="flex border-b-2 border-purple-100 bg-purple-50/50 px-6">
+        <div className="flex border-b-2 border-purple-100 bg-purple-50/50 px-6 overflow-x-auto">
           <button
             onClick={() => {
               soundFx.playClick();
               setActiveTab('overview');
             }}
-            className={`py-4 px-6 font-black text-sm sm:text-base border-b-4 transition ${
+            className={`py-4 px-6 font-black text-sm sm:text-base border-b-4 transition whitespace-nowrap cursor-pointer ${
               activeTab === 'overview'
                 ? 'border-purple-600 text-purple-900 bg-white shadow-sm'
                 : 'border-transparent text-purple-400 hover:text-purple-700'
@@ -199,7 +285,7 @@ ${topTypes}
               soundFx.playClick();
               setActiveTab('incorrect');
             }}
-            className={`py-4 px-6 font-black text-sm sm:text-base border-b-4 transition flex items-center gap-2 ${
+            className={`py-4 px-6 font-black text-sm sm:text-base border-b-4 transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === 'incorrect'
                 ? 'border-purple-600 text-purple-900 bg-white shadow-sm'
                 : 'border-transparent text-purple-400 hover:text-purple-700'
@@ -212,14 +298,14 @@ ${topTypes}
               soundFx.playClick();
               setActiveTab('ai');
             }}
-            className={`py-4 px-6 font-black text-sm sm:text-base border-b-4 transition flex items-center gap-2 ${
+            className={`py-4 px-6 font-black text-sm sm:text-base border-b-4 transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === 'ai'
                 ? 'border-purple-600 text-purple-900 bg-white shadow-sm'
                 : 'border-transparent text-purple-400 hover:text-purple-700'
             }`}
           >
             <Sparkles className="w-5 h-5 text-amber-500 animate-pulse" />
-            <span>🤖 Phân tích AI & Gợi ý</span>
+            <span>🤖 Phân tích & Gợi ý</span>
           </button>
         </div>
 
@@ -237,30 +323,27 @@ ${topTypes}
                     ? '🌟 Bé đã hoàn thành bài thi cực kỳ xuất sắc! Kiến thức tiếng Anh của bé vững vàng như một chú ong chăm chỉ!'
                     : result.percentage >= 50
                     ? '🏅 Bé làm rất tốt! Hãy tiếp tục rèn luyện thêm một chút để đạt điểm tuyệt đối ở vòng thi sau nhé!'
-                    : '💪 Đừng nản lòng bé nhé! Hãy cùng AI xem lại các câu chưa đúng để ôn tập thêm nha!'}
+                    : '💪 Đừng nản lòng bé nhé! Hãy xem lại các câu chưa đúng để ôn tập thêm nha!'}
                 </p>
               </div>
 
-              <div className="flex justify-center gap-4 pt-4">
+              <div className="flex flex-wrap justify-center gap-4 pt-4">
                 <button
                   onClick={() => {
                     soundFx.playClick();
                     onRetry();
                   }}
-                  className="px-8 py-4 bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white font-black rounded-2xl shadow-xl transition transform hover:scale-105 flex items-center gap-2 border-2 border-yellow-300"
+                  className="px-8 py-4 bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white font-black rounded-2xl shadow-xl transition transform hover:scale-105 flex items-center gap-2 border-2 border-yellow-300 cursor-pointer"
                 >
                   <RefreshCcw className="w-5 h-5" />
                   <span>THI LẠI / ĐỀ MỚI 🚀</span>
                 </button>
                 <button
-                  onClick={() => {
-                    soundFx.playClick();
-                    onHome();
-                  }}
-                  className="px-8 py-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-black rounded-2xl transition flex items-center gap-2 shadow"
+                  onClick={handleRequestHome}
+                  className="px-8 py-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-black rounded-2xl transition flex items-center gap-2 shadow cursor-pointer"
                 >
-                  <Home className="w-5 h-5" />
-                  <span>VỀ TRANG CHỦ</span>
+                  {isLocked ? <Lock className="w-5 h-5 text-indigo-600" /> : <Home className="w-5 h-5" />}
+                  <span>{isLocked ? 'VỀ TRANG CHỦ (KHÓA PH)' : 'VỀ TRANG CHỦ'}</span>
                 </button>
               </div>
             </div>
@@ -276,7 +359,10 @@ ${topTypes}
                 </div>
               ) : (
                 result.incorrectQuestions.map((item, idx) => (
-                  <div key={`${item.question.id}_${idx}`} className="bg-red-50/70 border-3 border-red-200 rounded-3xl p-6 space-y-3 shadow-md">
+                  <div
+                    key={`${item.question.id}_${idx}`}
+                    className="bg-red-50/70 border-3 border-red-200 rounded-3xl p-6 space-y-3 shadow-md"
+                  >
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div className="flex items-center gap-2">
                         <XCircle className="w-6 h-6 text-red-600 shrink-0" />
@@ -309,8 +395,7 @@ ${topTypes}
                     </div>
                     {item.question.explanation && (
                       <div className="pl-8 text-xs sm:text-sm text-purple-950 font-medium bg-amber-50 p-4 rounded-2xl border-2 border-amber-200 shadow-inner">
-                        💡 <strong>Giải thích cho bé:</strong>{' '}
-                        <FormattedText text={item.question.explanation} />
+                        💡 <strong>Giải thích cho bé:</strong> <FormattedText text={item.question.explanation} />
                       </div>
                     )}
                   </div>
@@ -324,13 +409,15 @@ ${topTypes}
               {loadingAi ? (
                 <div className="text-center py-16 space-y-4">
                   <Brain className="w-14 h-14 text-purple-600 animate-spin mx-auto" />
-                  <p className="font-black text-purple-950 text-lg">Trợ lý AI đang phân tích bài làm của bé và lập lộ trình ôn tập...</p>
+                  <p className="font-black text-purple-950 text-lg">
+                    Đang phân tích bài làm của bé và lập lộ trình ôn tập...
+                  </p>
                 </div>
               ) : (
                 <div className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 border-3 border-purple-300 rounded-3xl p-6 sm:p-10 space-y-5 shadow-xl">
                   <div className="flex items-center gap-3 border-b-2 border-purple-200 pb-4">
                     <Sparkles className="w-7 h-7 text-purple-600 animate-pulse" />
-                    <h3 className="text-2xl font-black text-purple-950">Phân Tích Thông Minh & Lời Khuyên Từ AI</h3>
+                    <h3 className="text-2xl font-black text-purple-950">Phân Tích Thông Minh & Lời Khuyên</h3>
                   </div>
                   <div className="prose prose-purple max-w-none text-purple-950 leading-relaxed space-y-3 whitespace-pre-line text-base font-medium">
                     {aiAnalysis}
@@ -341,6 +428,70 @@ ${topTypes}
           )}
         </div>
       </div>
+
+      {/* Parent PIN Modal to Exit to Main Screen */}
+      {showParentExitModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleConfirmParentExit}
+            className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl border-4 border-indigo-300 animate-in fade-in zoom-in duration-200"
+          >
+            <div className="w-16 h-16 rounded-3xl bg-indigo-100 text-indigo-700 flex items-center justify-center mx-auto mb-4 border-2 border-indigo-300">
+              <Lock className="w-8 h-8" />
+            </div>
+            <h3 className="text-2xl font-black text-purple-950 text-center mb-2">Xác thực Phụ huynh</h3>
+            <p className="text-gray-600 text-sm text-center mb-4 font-medium">
+              {remainingStudySeconds > 0
+                ? `Bé mới học được ${formatTime(totalStudySeconds)} / ${minStudyMinutes} phút tối thiểu (còn thiếu ${formatTime(remainingStudySeconds)}). Nhập Mật khẩu Phụ huynh để thoát về trang chủ.`
+                : 'Vui lòng nhập Mật khẩu Phụ huynh để thoát chế độ thi về giao diện chính.'}
+            </p>
+
+            <div className="space-y-4">
+              <div className="relative">
+                <input
+                  type={showPinText ? 'text' : 'password'}
+                  value={pinInput}
+                  onChange={(e) => {
+                    setPinInput(e.target.value);
+                    setPinError('');
+                  }}
+                  placeholder="Nhập mật khẩu phụ huynh..."
+                  autoFocus
+                  className="w-full pl-4 pr-11 py-3.5 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-indigo-50/50 font-black text-gray-800 text-center text-xl shadow-inner outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPinText((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500 hover:text-indigo-800 p-1 cursor-pointer"
+                >
+                  {showPinText ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
+
+              {pinError && <p className="text-xs font-bold text-red-600 text-center">{pinError}</p>}
+
+              <div className="grid grid-cols-2 gap-4 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundFx.playClick();
+                    setShowParentExitModal(false);
+                  }}
+                  className="py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-2xl transition cursor-pointer"
+                >
+                  Ở lại
+                </button>
+                <button
+                  type="submit"
+                  className="py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black rounded-2xl shadow-lg transition cursor-pointer"
+                >
+                  Xác nhận thoát
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

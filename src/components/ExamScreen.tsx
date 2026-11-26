@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Question, ExamConfig, ExamResultData, UserAnswer, QuestionType } from '../types';
 import {
   Clock,
@@ -16,6 +16,8 @@ import {
   Eye,
   EyeOff,
   LogOut,
+  Maximize2,
+  CornerDownLeft,
 } from 'lucide-react';
 import { soundFx } from '../utils/sound';
 import { isSentenceAnswerCorrect } from '../data/questionBank';
@@ -24,8 +26,9 @@ import { FormattedText } from './FormattedText';
 interface ExamScreenProps {
   questions: Question[];
   config: ExamConfig;
+  initialStudySeconds?: number;
   onSubmitExam: (result: ExamResultData) => void;
-  onQuit: () => void; // Only accessible with Parent PIN
+  onQuit: () => void;
 }
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, { label: string; color: string }> = {
@@ -44,7 +47,15 @@ const PAIR_COLOR_THEMES = [
   { bg: 'bg-cyan-50', border: 'border-cyan-400', text: 'text-cyan-950', badge: 'bg-cyan-600 text-white', lightBadge: 'bg-cyan-100 text-cyan-800' },
 ];
 
-export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSubmitExam, onQuit }) => {
+export const ExamScreen: React.FC<ExamScreenProps> = ({
+  questions,
+  config,
+  initialStudySeconds = 0,
+  onSubmitExam,
+  onQuit,
+}) => {
+  const isAdminMode = Boolean(config.isAdminMode);
+
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const answersRef = useRef<Record<string, any>>({});
@@ -56,23 +67,42 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
   const [parentInputPin, setParentInputPin] = useState('');
   const [parentModalError, setParentModalError] = useState('');
   const [showPinText, setShowPinText] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(() => Boolean(document.fullscreenElement));
   const submittedRef = useRef(false);
+  const dtInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedMatchLeft, setSelectedMatchLeft] = useState<string | null>(null);
   const [selectedMatchRight, setSelectedMatchRight] = useState<string | null>(null);
 
   const currentQ = questions[currentIndex];
-  const minStudySeconds = (config.minStudyMinutes || 0) * 60;
-  const parentPinExpected = config.parentPin || '1234';
+  const minStudySeconds = isAdminMode ? 0 : (config.minStudyMinutes || 0) * 60;
+  const totalStudySeconds = initialStudySeconds + elapsedSeconds;
+  const remainingStudySeconds = Math.max(0, minStudySeconds - totalStudySeconds);
+  const parentPinExpected = (config.parentPin || '1234').trim();
 
-  // Enter Fullscreen on mount
-  useEffect(() => {
+  const requestEnterFullscreen = useCallback(() => {
     try {
-      if (document.documentElement.requestFullscreen) {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
         document.documentElement.requestFullscreen().catch(() => {});
       }
-    } catch {}
+    } catch {
+      // Ignore fullscreen browser restrictions
+    }
   }, []);
+
+  // Enter Fullscreen automatically for non-admin exams and monitor ESC exit
+  useEffect(() => {
+    if (isAdminMode) return;
+    requestEnterFullscreen();
+
+    const handleFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+    };
+  }, [isAdminMode, requestEnterFullscreen]);
 
   useEffect(() => {
     answersRef.current = answers;
@@ -81,7 +111,13 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
   useEffect(() => {
     setSelectedMatchLeft(null);
     setSelectedMatchRight(null);
-  }, [currentIndex]);
+    // Auto-focus fill-in-the-blank input when landing on a 'dt' question
+    if (questions[currentIndex]?.type === 'dt') {
+      setTimeout(() => {
+        dtInputRef.current?.focus();
+      }, 30);
+    }
+  }, [currentIndex, questions]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -210,27 +246,43 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
     onSubmitExam(resultData);
   };
 
-  const handleNextQuestion = () => {
+  const handleNextQuestion = useCallback(() => {
     soundFx.playClick();
+    const latestAns = answersRef.current;
     const nextUnanswered = questions.findIndex(
-      (q, idx) => idx > currentIndex && !isQuestionAnswered(q, answers)
+      (q, idx) => idx > currentIndex && !isQuestionAnswered(q, latestAns)
     );
     if (nextUnanswered !== -1) {
       setCurrentIndex(nextUnanswered);
     } else {
-      const firstUnansweredAny = questions.findIndex((q) => !isQuestionAnswered(q, answers));
+      const firstUnansweredAny = questions.findIndex((q) => !isQuestionAnswered(q, latestAns));
       if (firstUnansweredAny !== -1) {
         setCurrentIndex(firstUnansweredAny);
       } else {
         setCurrentIndex((prev) => (prev + 1) % questions.length);
       }
     }
-  };
+  }, [questions, currentIndex]);
 
   const handlePrevQuestion = () => {
     soundFx.playClick();
     setCurrentIndex((prev) => (prev === 0 ? questions.length - 1 : prev - 1));
   };
+
+  // Press Enter anywhere on the exam screen to advance to the next question
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter') return;
+      if (e.isComposing || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (showSubmitModal || showParentModal) return;
+
+      e.preventDefault();
+      handleNextQuestion();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleNextQuestion, showSubmitModal, showParentModal]);
 
   const renderQuestionInput = () => {
     if (!currentQ) return null;
@@ -272,8 +324,11 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
     if (currentQ.type === 'dt') {
       return (
         <div className="mt-6 space-y-3">
-          <label className="block text-sm font-black text-purple-900">Điền từ đúng vào ô trống:</label>
+          <label className="block text-sm font-black text-purple-900">
+            Điền từ đúng vào ô trống (nhấn Enter để sang câu tiếp):
+          </label>
           <input
+            ref={dtInputRef}
             type="text"
             value={answers[currentQ.id] || ''}
             onChange={(e) => handleAnswerChange(currentQ.id, e.target.value, false)}
@@ -593,7 +648,9 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
                     {isConnected && theme ? (
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className={`text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 ${theme.lightBadge}`}>
+                        <span
+                          className={`text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 ${theme.lightBadge}`}
+                        >
                           <Check className="w-3 h-3" />
                           <span>Nối ({connectedLeftId})</span>
                         </span>
@@ -642,13 +699,20 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
   const handleRequestQuit = () => {
     soundFx.playClick();
+    if (isAdminMode) {
+      onQuit();
+      return;
+    }
     setParentInputPin('');
     setParentModalError('');
     setShowParentModal(true);
   };
 
-  const handleVerifyParentPinAndQuit = () => {
-    if (parentInputPin.trim() === parentPinExpected || parentInputPin.trim() === config.parentEmailPassword) {
+  const handleVerifyParentPinAndQuit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const entered = parentInputPin.trim();
+    const emailPass = (config.parentEmailPassword || '').trim();
+    if (entered && (entered === parentPinExpected || (emailPass && entered === emailPass))) {
       soundFx.playSuccess();
       setShowParentModal(false);
       onQuit();
@@ -658,19 +722,29 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
     }
   };
 
-  const handleAttemptSubmit = () => {
-    if (minStudySeconds > 0 && elapsedSeconds < minStudySeconds) {
-      soundFx.playError();
-      setParentInputPin('');
-      setParentModalError(`Chưa đạt thời gian học tối thiểu (${config.minStudyMinutes} phút). Vui lòng nhập Mật khẩu Phụ huynh để nộp bài sớm.`);
-      setShowParentModal(true);
-      return;
-    }
-    setShowSubmitModal(true);
-  };
-
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
+      {/* Fullscreen Reminder Banner when student presses ESC during locked exam */}
+      {!isAdminMode && !isFullscreen && (
+        <div className="mb-4 bg-amber-50 border-3 border-amber-300 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-2.5 text-amber-950 text-xs sm:text-sm font-bold">
+            <Maximize2 className="w-5 h-5 text-amber-600 shrink-0" />
+            <span>Bài thi đang ở chế độ tập trung toàn màn hình. Bấm nút bên cạnh để mở lại toàn màn hình nhé!</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              soundFx.playClick();
+              requestEnterFullscreen();
+            }}
+            className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-purple-950 font-black text-xs flex items-center gap-1.5 shadow cursor-pointer"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+            <span>Mở toàn màn hình</span>
+          </button>
+        </div>
+      )}
+
       {/* Top status bar */}
       <div className="bg-white/90 backdrop-blur-md rounded-3xl shadow-xl border-3 border-purple-200 p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
@@ -680,20 +754,27 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           <div>
             <h3 className="font-black text-purple-950 text-lg">{config.studentName}</h3>
             <p className="text-xs text-purple-600 font-bold">
-              Lớp {config.grade} • Cấp {config.round} ({
-                ({
+              Lớp {config.grade} • Cấp {config.round} (
+              {(
+                {
                   1: 'Khởi động',
                   2: 'Vượt chướng ngại vật',
                   3: 'Tranh tài',
                   4: 'Tăng tốc',
                   5: 'Chinh phục đỉnh cao',
-                } as Record<number, string>)[config.round] || `Vòng ${config.round}`
-              })
+                } as Record<number, string>
+              )[config.round] || `Vòng ${config.round}`}
+              )
+              {!isAdminMode && minStudySeconds > 0 && (
+                <span className="ml-2 text-indigo-700">
+                  • Đã học: {formatTime(totalStudySeconds)}/{config.minStudyMinutes}p
+                </span>
+              )}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center flex-wrap gap-3">
           <div className="flex items-center space-x-2 bg-purple-100 px-4 py-2.5 rounded-2xl border-2 border-purple-300 shadow-inner">
             <Clock className={`w-5 h-5 ${timeLeft < 300 ? 'text-red-600 animate-bounce' : 'text-purple-700'}`} />
             <span className={`font-mono font-black text-xl ${timeLeft < 300 ? 'text-red-600' : 'text-purple-950'}`}>
@@ -702,9 +783,10 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           </div>
 
           <button
+            type="button"
             onClick={() => {
               soundFx.playClick();
-              handleAttemptSubmit();
+              setShowSubmitModal(true);
             }}
             className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black rounded-2xl shadow-lg transition transform hover:scale-105 flex items-center gap-2 border-2 border-white/40 cursor-pointer"
           >
@@ -713,12 +795,13 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           </button>
 
           <button
+            type="button"
             onClick={handleRequestQuit}
             className="px-4 py-3 bg-red-100 hover:bg-red-200 text-red-700 font-black rounded-2xl shadow transition flex items-center gap-1.5 text-xs cursor-pointer"
-            title="Thoát cần mật khẩu Phụ huynh"
+            title={isAdminMode ? 'Thoát về trang chủ' : 'Thoát cần mật khẩu Phụ huynh'}
           >
-            <LogOut className="w-4 h-4" />
-            <span>Thoát (Khóa PH)</span>
+            {isAdminMode ? <LogOut className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+            <span>{isAdminMode ? 'Thoát' : 'Thoát (Khóa PH)'}</span>
           </button>
         </div>
       </div>
@@ -762,8 +845,9 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           </div>
 
           {/* Navigation buttons */}
-          <div className="flex items-center justify-between pt-8 mt-10 border-t-2 border-purple-100">
+          <div className="flex items-center justify-between gap-3 pt-8 mt-10 border-t-2 border-purple-100">
             <button
+              type="button"
               onClick={handlePrevQuestion}
               className="px-6 py-3 rounded-2xl font-black flex items-center gap-2 transition bg-purple-100 hover:bg-purple-200 text-purple-900 shadow cursor-pointer"
             >
@@ -772,10 +856,15 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
             </button>
 
             <button
+              type="button"
               onClick={handleNextQuestion}
-              className="px-8 py-3 rounded-2xl font-black flex items-center gap-2 transition shadow-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-indigo-700 text-white transform hover:scale-105 cursor-pointer"
+              className="px-7 py-3 rounded-2xl font-black flex items-center gap-2 transition shadow-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-indigo-700 text-white transform hover:scale-105 cursor-pointer"
             >
               <span>Câu tiếp (chưa làm)</span>
+              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] bg-white/20 px-2 py-0.5 rounded-lg font-bold">
+                <CornerDownLeft className="w-3 h-3" />
+                Enter
+              </span>
               <ChevronRight className="w-6 h-6" />
             </button>
           </div>
@@ -794,6 +883,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
               return (
                 <button
+                  type="button"
                   key={`${q.id}_${idx}`}
                   onClick={() => {
                     soundFx.playClick();
@@ -822,6 +912,9 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
               <div className="w-3.5 h-3.5 bg-purple-50 border-2 border-purple-200 rounded-lg"></div>
               <span>Chưa trả lời</span>
             </div>
+            <p className="text-[11px] text-purple-600 pt-1">
+              Mẹo: Nhấn phím <strong>Enter</strong> để chuyển nhanh sang câu tiếp theo.
+            </p>
           </div>
         </div>
       </div>
@@ -839,6 +932,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
             </p>
             <div className="grid grid-cols-2 gap-4">
               <button
+                type="button"
                 onClick={() => {
                   soundFx.playClick();
                   setShowSubmitModal(false);
@@ -848,6 +942,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                 Làm tiếp
               </button>
               <button
+                type="button"
                 onClick={() => {
                   soundFx.playSuccess();
                   handleSubmitExam();
@@ -861,16 +956,21 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
         </div>
       )}
 
-      {/* Parent PIN / Password Modal for Exit or Early Submission */}
+      {/* Parent PIN / Password Modal for Exiting to Main Screen */}
       {showParentModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl border-4 border-indigo-300 animate-in fade-in zoom-in duration-200">
+          <form
+            onSubmit={handleVerifyParentPinAndQuit}
+            className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl border-4 border-indigo-300 animate-in fade-in zoom-in duration-200"
+          >
             <div className="w-16 h-16 rounded-3xl bg-indigo-100 text-indigo-700 flex items-center justify-center mx-auto mb-4 border-2 border-indigo-300">
               <Lock className="w-8 h-8" />
             </div>
             <h3 className="text-2xl font-black text-purple-950 text-center mb-2">Xác thực Phụ huynh</h3>
-            <p className="text-gray-600 text-sm text-center mb-6 font-medium">
-              {parentModalError || 'Vui lòng nhập Mật khẩu Phụ huynh để thoát hoặc nộp bài sớm.'}
+            <p className="text-gray-600 text-sm text-center mb-5 font-medium">
+              {remainingStudySeconds > 0
+                ? `Chưa đạt thời gian học tối thiểu (${config.minStudyMinutes} phút, còn thiếu ${formatTime(remainingStudySeconds)}). Nhập Mật khẩu Phụ huynh để thoát về giao diện chính.`
+                : 'Vui lòng nhập Mật khẩu Phụ huynh để thoát bài thi về giao diện chính.'}
             </p>
 
             <div className="space-y-4">
@@ -878,10 +978,13 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                 <input
                   type={showPinText ? 'text' : 'password'}
                   value={parentInputPin}
-                  onChange={(e) => setParentInputPin(e.target.value)}
+                  onChange={(e) => {
+                    setParentInputPin(e.target.value);
+                    setParentModalError('');
+                  }}
                   placeholder="Nhập mật khẩu phụ huynh..."
                   autoFocus
-                  className="w-full pl-4 pr-11 py-3.5 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-indigo-50/50 font-black text-gray-800 text-center text-xl shadow-inner"
+                  className="w-full pl-4 pr-11 py-3.5 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-indigo-50/50 font-black text-gray-800 text-center text-xl shadow-inner outline-none"
                 />
                 <button
                   type="button"
@@ -896,6 +999,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
               <div className="grid grid-cols-2 gap-4 pt-2">
                 <button
+                  type="button"
                   onClick={() => {
                     soundFx.playClick();
                     setShowParentModal(false);
@@ -905,14 +1009,14 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
                   Quay lại thi
                 </button>
                 <button
-                  onClick={handleVerifyParentPinAndQuit}
+                  type="submit"
                   className="py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black rounded-2xl shadow-lg transition cursor-pointer"
                 >
                   Xác nhận thoát
                 </button>
               </div>
             </div>
-          </div>
+          </form>
         </div>
       )}
     </div>
