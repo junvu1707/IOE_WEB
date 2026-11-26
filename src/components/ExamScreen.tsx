@@ -70,6 +70,14 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => Boolean(document.fullscreenElement));
   const submittedRef = useRef(false);
   const dtInputRef = useRef<HTMLInputElement>(null);
+  const autoNextTimerRef = useRef<number | null>(null);
+
+  const clearAutoNextTimer = useCallback(() => {
+    if (autoNextTimerRef.current !== null) {
+      window.clearTimeout(autoNextTimerRef.current);
+      autoNextTimerRef.current = null;
+    }
+  }, []);
 
   const [selectedMatchLeft, setSelectedMatchLeft] = useState<string | null>(null);
   const [selectedMatchRight, setSelectedMatchRight] = useState<string | null>(null);
@@ -109,6 +117,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
   }, [answers]);
 
   useEffect(() => {
+    clearAutoNextTimer();
     setSelectedMatchLeft(null);
     setSelectedMatchRight(null);
     // Auto-focus fill-in-the-blank input when landing on a 'dt' question
@@ -117,7 +126,8 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
         dtInputRef.current?.focus();
       }, 30);
     }
-  }, [currentIndex, questions]);
+    return () => clearAutoNextTimer();
+  }, [currentIndex, questions, clearAutoNextTimer]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -246,25 +256,30 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
     onSubmitExam(resultData);
   };
 
-  const handleNextQuestion = useCallback(() => {
-    soundFx.playClick();
-    const latestAns = answersRef.current;
-    const nextUnanswered = questions.findIndex(
-      (q, idx) => idx > currentIndex && !isQuestionAnswered(q, latestAns)
-    );
-    if (nextUnanswered !== -1) {
-      setCurrentIndex(nextUnanswered);
-    } else {
-      const firstUnansweredAny = questions.findIndex((q) => !isQuestionAnswered(q, latestAns));
-      if (firstUnansweredAny !== -1) {
-        setCurrentIndex(firstUnansweredAny);
+  const handleNextQuestion = useCallback(
+    (playSound = true) => {
+      clearAutoNextTimer();
+      if (playSound) soundFx.playClick();
+      const latestAns = answersRef.current;
+      const nextUnanswered = questions.findIndex(
+        (q, idx) => idx > currentIndex && !isQuestionAnswered(q, latestAns)
+      );
+      if (nextUnanswered !== -1) {
+        setCurrentIndex(nextUnanswered);
       } else {
-        setCurrentIndex((prev) => (prev + 1) % questions.length);
+        const firstUnansweredAny = questions.findIndex((q) => !isQuestionAnswered(q, latestAns));
+        if (firstUnansweredAny !== -1) {
+          setCurrentIndex(firstUnansweredAny);
+        } else {
+          setCurrentIndex((prev) => (prev + 1) % questions.length);
+        }
       }
-    }
-  }, [questions, currentIndex]);
+    },
+    [questions, currentIndex, clearAutoNextTimer]
+  );
 
   const handlePrevQuestion = () => {
+    clearAutoNextTimer();
     soundFx.playClick();
     setCurrentIndex((prev) => (prev === 0 ? questions.length - 1 : prev - 1));
   };
@@ -297,7 +312,14 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
               <button
                 type="button"
                 key={idx}
-                onClick={() => handleAnswerChange(currentQ.id, opt)}
+                onClick={() => {
+                  handleAnswerChange(currentQ.id, opt);
+                  clearAutoNextTimer();
+                  autoNextTimerRef.current = window.setTimeout(() => {
+                    autoNextTimerRef.current = null;
+                    handleNextQuestion(false);
+                  }, 220);
+                }}
                 className={`p-5 rounded-3xl border-3 text-left font-extrabold transition-all flex items-center gap-4 transform hover:scale-[1.02] shadow-md cursor-pointer ${
                   isSelected
                     ? 'bg-gradient-to-r from-purple-500 to-indigo-600 border-yellow-300 text-white shadow-purple-300/50 scale-[1.02] ring-4 ring-purple-200'
@@ -857,7 +879,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
 
             <button
               type="button"
-              onClick={handleNextQuestion}
+              onClick={() => handleNextQuestion()}
               className="px-7 py-3 rounded-2xl font-black flex items-center gap-2 transition shadow-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-indigo-700 text-white transform hover:scale-105 cursor-pointer"
             >
               <span>Câu tiếp (chưa làm)</span>
