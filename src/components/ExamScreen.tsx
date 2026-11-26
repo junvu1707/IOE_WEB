@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Question, ExamConfig, ExamResultData, UserAnswer, QuestionType, MatchingPair } from '../types';
+import { Question, ExamConfig, ExamResultData, UserAnswer, QuestionType } from '../types';
 import {
   Clock,
   AlertCircle,
@@ -12,6 +12,10 @@ import {
   Link2,
   Unlink,
   Check,
+  Lock,
+  Eye,
+  EyeOff,
+  LogOut,
 } from 'lucide-react';
 import { soundFx } from '../utils/sound';
 import { isSentenceAnswerCorrect } from '../data/questionBank';
@@ -21,7 +25,7 @@ interface ExamScreenProps {
   questions: Question[];
   config: ExamConfig;
   onSubmitExam: (result: ExamResultData) => void;
-  onQuit: () => void;
+  onQuit: () => void; // Only accessible with Parent PIN
 }
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, { label: string; color: string }> = {
@@ -31,7 +35,6 @@ const QUESTION_TYPE_LABELS: Record<QuestionType, { label: string; color: string 
   sx: { label: 'Sắp xếp câu', color: 'bg-pink-100 text-pink-800 border-pink-200' },
 };
 
-// Distinct color themes for matching pairs so each connected pair shares the same color
 const PAIR_COLOR_THEMES = [
   { bg: 'bg-rose-50', border: 'border-rose-400', text: 'text-rose-950', badge: 'bg-rose-600 text-white', lightBadge: 'bg-rose-100 text-rose-800' },
   { bg: 'bg-blue-50', border: 'border-blue-400', text: 'text-blue-950', badge: 'bg-blue-600 text-white', lightBadge: 'bg-blue-100 text-blue-800' },
@@ -41,20 +44,35 @@ const PAIR_COLOR_THEMES = [
   { bg: 'bg-cyan-50', border: 'border-cyan-400', text: 'text-cyan-950', badge: 'bg-cyan-600 text-white', lightBadge: 'bg-cyan-100 text-cyan-800' },
 ];
 
-export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSubmitExam }) => {
+export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSubmitExam, onQuit }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const answersRef = useRef<Record<string, any>>({});
   const [timeLeft, setTimeLeft] = useState(config.timeLimitSeconds);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [startTime] = useState(Date.now());
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [showParentModal, setShowParentModal] = useState(false);
+  const [parentInputPin, setParentInputPin] = useState('');
+  const [parentModalError, setParentModalError] = useState('');
+  const [showPinText, setShowPinText] = useState(false);
   const submittedRef = useRef(false);
 
-  // For interactive matching question: selected left or right item
   const [selectedMatchLeft, setSelectedMatchLeft] = useState<string | null>(null);
   const [selectedMatchRight, setSelectedMatchRight] = useState<string | null>(null);
 
   const currentQ = questions[currentIndex];
+  const minStudySeconds = (config.minStudyMinutes || 0) * 60;
+  const parentPinExpected = config.parentPin || '1234';
+
+  // Enter Fullscreen on mount
+  useEffect(() => {
+    try {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    } catch {}
+  }, []);
 
   useEffect(() => {
     answersRef.current = answers;
@@ -67,6 +85,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
   useEffect(() => {
     const timer = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
@@ -80,7 +99,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [startTime]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -374,7 +393,6 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
       const connectPair = (leftId: string, rightText: string) => {
         const newMap: Record<string, string> = {};
-        // Keep existing connections except any old link using this leftId or rightText (enforce 1-to-1)
         Object.entries(userPairMap).forEach(([k, v]) => {
           if (k !== leftId && v !== rightText) {
             newMap[k] = v;
@@ -388,18 +406,15 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
       };
 
       const handleLeftClick = (leftId: string) => {
-        // Click 2nd time on same selected left item -> deselect
         if (selectedMatchLeft === leftId) {
           soundFx.playClick();
           setSelectedMatchLeft(null);
           return;
         }
-        // If a right item is already selected -> connect them
         if (selectedMatchRight !== null) {
           connectPair(leftId, selectedMatchRight);
           return;
         }
-        // If already connected -> click to unconnect
         if (userPairMap[leftId]) {
           soundFx.playClick();
           const newMap = { ...userPairMap };
@@ -407,24 +422,20 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           handleAnswerChange(currentQ.id, newMap, false);
           return;
         }
-        // Click 1st time -> select this left item
         soundFx.playClick();
         setSelectedMatchLeft(leftId);
       };
 
       const handleRightClick = (rightText: string, connectedLeftId?: string) => {
-        // Click 2nd time on same selected right item -> deselect
         if (selectedMatchRight === rightText) {
           soundFx.playClick();
           setSelectedMatchRight(null);
           return;
         }
-        // If a left item is already selected -> connect them
         if (selectedMatchLeft !== null) {
           connectPair(selectedMatchLeft, rightText);
           return;
         }
-        // If already connected -> click to unconnect
         if (connectedLeftId) {
           soundFx.playClick();
           const newMap = { ...userPairMap };
@@ -432,7 +443,6 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           handleAnswerChange(currentQ.id, newMap, false);
           return;
         }
-        // Click 1st time -> select this right item
         soundFx.playClick();
         setSelectedMatchRight(rightText);
       };
@@ -630,6 +640,35 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
   const answeredCount = questions.filter((q) => isQuestionAnswered(q, answers)).length;
   const typeMeta = currentQ ? QUESTION_TYPE_LABELS[currentQ.type] : null;
 
+  const handleRequestQuit = () => {
+    soundFx.playClick();
+    setParentInputPin('');
+    setParentModalError('');
+    setShowParentModal(true);
+  };
+
+  const handleVerifyParentPinAndQuit = () => {
+    if (parentInputPin.trim() === parentPinExpected || parentInputPin.trim() === config.parentEmailPassword) {
+      soundFx.playSuccess();
+      setShowParentModal(false);
+      onQuit();
+    } else {
+      soundFx.playError();
+      setParentModalError('Mật khẩu Phụ huynh không đúng!');
+    }
+  };
+
+  const handleAttemptSubmit = () => {
+    if (minStudySeconds > 0 && elapsedSeconds < minStudySeconds) {
+      soundFx.playError();
+      setParentInputPin('');
+      setParentModalError(`Chưa đạt thời gian học tối thiểu (${config.minStudyMinutes} phút). Vui lòng nhập Mật khẩu Phụ huynh để nộp bài sớm.`);
+      setShowParentModal(true);
+      return;
+    }
+    setShowSubmitModal(true);
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
       {/* Top status bar */}
@@ -665,12 +704,21 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           <button
             onClick={() => {
               soundFx.playClick();
-              setShowSubmitModal(true);
+              handleAttemptSubmit();
             }}
             className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black rounded-2xl shadow-lg transition transform hover:scale-105 flex items-center gap-2 border-2 border-white/40 cursor-pointer"
           >
             <Send className="w-5 h-5" />
             <span>NỘP BÀI 🎯</span>
+          </button>
+
+          <button
+            onClick={handleRequestQuit}
+            className="px-4 py-3 bg-red-100 hover:bg-red-200 text-red-700 font-black rounded-2xl shadow transition flex items-center gap-1.5 text-xs cursor-pointer"
+            title="Thoát cần mật khẩu Phụ huynh"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>Thoát (Khóa PH)</span>
           </button>
         </div>
       </div>
@@ -725,7 +773,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
 
             <button
               onClick={handleNextQuestion}
-              className="px-8 py-3 rounded-2xl font-black flex items-center gap-2 transition shadow-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white transform hover:scale-105 cursor-pointer"
+              className="px-8 py-3 rounded-2xl font-black flex items-center gap-2 transition shadow-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-indigo-700 text-white transform hover:scale-105 cursor-pointer"
             >
               <span>Câu tiếp (chưa làm)</span>
               <ChevronRight className="w-6 h-6" />
@@ -733,7 +781,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
           </div>
         </div>
 
-        {/* Question palette sidebar (10 questions per row) */}
+        {/* Question palette sidebar */}
         <div className="lg:col-span-5 xl:col-span-4 bg-white/95 backdrop-blur-md rounded-3xl shadow-xl border-3 border-purple-200 p-4 flex flex-col h-[540px]">
           <h4 className="font-black text-purple-950 mb-3 text-sm flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-yellow-500" />
@@ -808,6 +856,61 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({ questions, config, onSub
               >
                 Nộp bài luôn! 🎯
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Parent PIN / Password Modal for Exit or Early Submission */}
+      {showParentModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl border-4 border-indigo-300 animate-in fade-in zoom-in duration-200">
+            <div className="w-16 h-16 rounded-3xl bg-indigo-100 text-indigo-700 flex items-center justify-center mx-auto mb-4 border-2 border-indigo-300">
+              <Lock className="w-8 h-8" />
+            </div>
+            <h3 className="text-2xl font-black text-purple-950 text-center mb-2">Xác thực Phụ huynh</h3>
+            <p className="text-gray-600 text-sm text-center mb-6 font-medium">
+              {parentModalError || 'Vui lòng nhập Mật khẩu Phụ huynh để thoát hoặc nộp bài sớm.'}
+            </p>
+
+            <div className="space-y-4">
+              <div className="relative">
+                <input
+                  type={showPinText ? 'text' : 'password'}
+                  value={parentInputPin}
+                  onChange={(e) => setParentInputPin(e.target.value)}
+                  placeholder="Nhập mật khẩu phụ huynh..."
+                  autoFocus
+                  className="w-full pl-4 pr-11 py-3.5 rounded-2xl border-3 border-indigo-200 focus:border-indigo-600 bg-indigo-50/50 font-black text-gray-800 text-center text-xl shadow-inner"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPinText((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500 hover:text-indigo-800 p-1 cursor-pointer"
+                >
+                  {showPinText ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
+
+              {parentModalError && <p className="text-xs font-bold text-red-600 text-center">{parentModalError}</p>}
+
+              <div className="grid grid-cols-2 gap-4 pt-2">
+                <button
+                  onClick={() => {
+                    soundFx.playClick();
+                    setShowParentModal(false);
+                  }}
+                  className="py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-2xl transition cursor-pointer"
+                >
+                  Quay lại thi
+                </button>
+                <button
+                  onClick={handleVerifyParentPinAndQuit}
+                  className="py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black rounded-2xl shadow-lg transition cursor-pointer"
+                >
+                  Xác nhận thoát
+                </button>
+              </div>
             </div>
           </div>
         </div>

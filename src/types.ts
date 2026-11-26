@@ -62,10 +62,14 @@ export interface LoadedExamPool {
 export interface ExamConfig {
   studentName: string;
   accountId?: string;
+  parentEmail?: string;
+  parentEmailPassword?: string;
   grade: GradeLevel;
   round: ContestRound;
   questionCount: number; // e.g. 20, 50, 100, 200
   timeLimitSeconds: number; // default 1800s (30 mins)
+  minStudyMinutes?: number;
+  parentPin?: string;
   source?: ExamSourceType;
   sourceFileName?: string;
 }
